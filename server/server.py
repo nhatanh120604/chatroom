@@ -3,11 +3,12 @@ from flask import Flask, request
 import eventlet
 
 class ChatServer():
-    def __init__(self):
+    def __init__(self, test=False):
         self.sio = socketio.Server(cors_allowed_origins='*')
         self.app = Flask(__name__)
         self.app.wsgi_app = socketio.WSGIApp(self.sio, self.app.wsgi_app)
         self.clients = {}
+        self.test = test
 
         self.register_events()
 
@@ -16,6 +17,7 @@ class ChatServer():
         @self.sio.event
         def connect(sid, environ):
             print(f"Client connected: {sid}")
+            
 
         @self.sio.event
         def disconnect(sid):
@@ -40,11 +42,21 @@ class ChatServer():
 
         @self.sio.event
         def message(sid, data):
-            username = self.clients.get(sid, 'Unknown')
-            msg = data.get('message')
-            if msg:
-                self.sio.emit('message', {'username': username, 'message': msg})
-                print(f"Message from {username}: {msg}")
+            """Handle incoming messages from a client and broadcast them."""
+            sender_username = self.clients.get(sid, 'Unknown')
+            
+            # The data from the test client is the entire payload.
+            # We need to add the sender's username and broadcast it.
+            if data and 'message' in data:
+                # Prepare the payload to be sent to all clients
+                broadcast_data = {
+                    'username': sender_username,
+                    'message': data.get('message'),
+                    'timestamp': data.get('timestamp') # Forward the timestamp for latency calculation
+                }
+                # Emit to all clients, including the listener.
+                # `skip_sid=sid` is optional but good practice to not send the message back to the original sender.
+                self.sio.emit('message', broadcast_data, skip_sid=sid)
 
 if __name__ == '__main__':
     server = ChatServer()
