@@ -9,6 +9,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 
 class ChatClient(QObject):
     messageReceived = Signal(str, str)    # username, message
+    privateMessageReceived = Signal(str, str, str) # sender, recipient, message
     usersUpdated = Signal('QVariant')     # list of usernames
     disconnected = Signal()               # Signal to notify QML of disconnection
 
@@ -47,6 +48,13 @@ class ChatClient(QObject):
             username = data.get('username', 'Unknown')
             message = data.get('message', '')
             self.messageReceived.emit(username, message)
+
+        @self._sio.on('private_message_received')
+        def on_private_message(data):
+            sender = data.get('sender', 'Unknown')
+            recipient = data.get('recipient', 'Unknown')
+            message = data.get('message', '')
+            self.privateMessageReceived.emit(sender, recipient, message)
 
         # Replaced user_joined with update_user_list to sync with server
         @self._sio.on('update_user_list')
@@ -103,6 +111,13 @@ class ChatClient(QObject):
     def sendMessage(self, message: str):
         self._ensure_connected()
         self._emit_when_connected('message', {'message': message})
+
+    @Slot(str, str)
+    def sendPrivateMessage(self, recipient: str, message: str):
+        """Sends a message to a specific user."""
+        self._ensure_connected()
+        payload = {'recipient': recipient, 'message': message}
+        self._emit_when_connected('private_message', payload)
 
     @Slot()
     def disconnect(self):

@@ -62,10 +62,23 @@ ApplicationWindow {
                     anchors.bottom: inputRow.top
                     anchors.margins: 8
                     clip: true
+                    // Move to the last message
+                    onCountChanged: positionViewAtEnd()
+
                     delegate: Row {
                         spacing: 8
-                        Text { text: model.user + ":"; font.bold: true }
-                        Text { text: model.text; wrapMode: Text.Wrap }
+                        Text {
+                            text: model.user + ":"
+                            font.bold: true
+                            // Italicize private messages
+                            font.italic: model.isPrivate
+                        }
+                        Text {
+                            text: model.text
+                            wrapMode: Text.Wrap
+                            // Italicize private messages
+                            font.italic: model.isPrivate
+                        }
                     }
                 }
 
@@ -80,7 +93,7 @@ ApplicationWindow {
 
                     TextField {
                         id: messageField
-                        placeholderText: "Type a message"
+                        placeholderText: "Type a message or /msg <user> <message>"
                         width: parent.width - sendBtn.width - 20
                         anchors.verticalCenter: parent.verticalCenter
                         onAccepted: sendBtn.clicked()
@@ -90,8 +103,26 @@ ApplicationWindow {
                         text: "Send"
                         onClicked: {
                             if (messageField.text.length > 0) {
-                                chatClient.sendMessage(messageField.text)
-                                messageField.text = ""
+                                var text = messageField.text;
+                                // Check for private message command
+                                if (text.startsWith("/msg ")) {
+                                    var parts = text.substring(5).split(" ");
+                                    var recipient = parts.shift();
+                                    var message = parts.join(" ");
+                                    if (recipient && message) {
+                                        chatClient.sendPrivateMessage(recipient, message);
+                                        // Display the sent private message locally
+                                        messagesModel.append({
+                                            "user": "To " + recipient,
+                                            "text": message,
+                                            "isPrivate": true
+                                        });
+                                    }
+                                } else {
+                                    // Send public message
+                                    chatClient.sendMessage(text);
+                                }
+                                messageField.text = "";
                             }
                         }
                     }
@@ -125,9 +156,14 @@ ApplicationWindow {
                         width: parent.width
                         height: parent.height - usersHeader.height - parent.spacing
                         clip: true
-                        delegate: Text {
+                        delegate: ItemDelegate {
                             text: name
-                            leftPadding: 4
+                            width: parent.width
+                            // When a user is clicked, start a private message
+                            onClicked: {
+                                messageField.text = "/msg " + name + " "
+                                messageField.focus = true
+                            }
                         }
                     }
                 }
@@ -142,7 +178,19 @@ ApplicationWindow {
         target: chatClient
 
         function onMessageReceived(username, message) {
-            messagesModel.append({"user": username, "text": message})
+            messagesModel.append({
+                "user": username,
+                "text": message,
+                "isPrivate": false
+            })
+        }
+
+        function onPrivateMessageReceived(sender, recipient, message) {
+            messagesModel.append({
+                "user": "From " + sender,
+                "text": message,
+                "isPrivate": true
+            })
         }
 
         function onUsersUpdated(users) {
@@ -150,6 +198,18 @@ ApplicationWindow {
             for (var i = 0; i < users.length; i++) {
                 usersModel.append({"name": users[i]})
             }
+        }
+
+        function onDisconnected() {
+            // Reset UI to initial state
+            usernameField.enabled = true
+            messagesModel.clear()
+            usersModel.clear()
+            messagesModel.append({
+                "user": "System",
+                "text": "You have been disconnected.",
+                "isPrivate": false
+            })
         }
     }
 }
