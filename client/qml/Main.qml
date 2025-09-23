@@ -24,13 +24,18 @@ ApplicationWindow {
                 id: usernameField
                 placeholderText: "Enter username"
                 width: 200
+                // Allow pressing Enter to trigger registration
+                onAccepted: registerBtn.clicked()
             }
             Button {
+                id: registerBtn
                 text: "Register"
                 onClicked: {
                     if (usernameField.text.length > 0) {
                         chatClient.register(usernameField.text)
                         usernameField.enabled = false
+                        // Move focus to the message input field after registration
+                        messageField.focus = true
                     }
                 }
             }
