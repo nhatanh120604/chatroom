@@ -89,11 +89,16 @@ class ChatClient(QObject):
         def on_error(data):
             message = data.get("message", "An unknown error occurred.")
             self._notify_error(message)
-            if self._desired_username and self._desired_username == self._username:
+            lowered = message.lower()
+            is_username_error = "username" in lowered or "name" in lowered
+            if (
+                is_username_error
+                and self._desired_username
+                and self._desired_username == self._username
+            ):
                 # Preserve desired username for reconnection attempts but allow UI edits
                 self._set_username("")
-            lowered = message.lower()
-            if self._desired_username and "username" in lowered:
+            if self._desired_username and is_username_error:
                 self._desired_username = ""
 
     def _ensure_connected(self):
@@ -189,6 +194,7 @@ class ChatClient(QObject):
 
 
 def main():
+    os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
     app = QGuiApplication(sys.argv)
     engine = QQmlApplicationEngine()
 
