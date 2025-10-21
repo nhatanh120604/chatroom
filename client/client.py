@@ -10,8 +10,12 @@ from PySide6.QtQml import QQmlApplicationEngine
 
 class ChatClient(QObject):
     messageReceived = Signal(str, str)  # username, message
-    privateMessageReceived = Signal(str, str, str, int, str)  # sender, recipient, message, message_id, status
-    privateMessageSent = Signal(str, str, str, int, str)  # sender, recipient, message, message_id, status
+    privateMessageReceived = Signal(
+        str, str, str, int, str
+    )  # sender, recipient, message, message_id, status
+    privateMessageSent = Signal(
+        str, str, str, int, str
+    )  # sender, recipient, message, message_id, status
     privateMessageRead = Signal(int)  # message_id
     publicTypingReceived = Signal(str, bool)  # username, is typing
     privateTypingReceived = Signal(str, bool)  # username, is typing
@@ -105,9 +109,7 @@ class ChatClient(QObject):
                 message_id = int(message_id)
             except (TypeError, ValueError):
                 message_id = 0
-            self.privateMessageSent.emit(
-                sender, recipient, message, message_id, status
-            )
+            self.privateMessageSent.emit(sender, recipient, message, message_id, status)
 
         @self._sio.on("private_message_read")
         def on_private_message_read(data):
