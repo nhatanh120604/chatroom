@@ -6,6 +6,9 @@ import os
 import threading
 from dotenv import load_dotenv
 
+
+MAX_PUBLIC_HISTORY = 200
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -23,6 +26,7 @@ class ChatServer:
         self.clients = {}
         self.test = test
         self.lock = threading.Lock()  # Lock for thread-safe operations on clients dict
+        self.public_history = []
 
         self.register_events()
 
@@ -31,6 +35,10 @@ class ChatServer:
         @self.sio.event
         def connect(sid, environ):
             logging.info(f"Client connected: {sid}")
+            with self.lock:
+                history_snapshot = list(self.public_history)
+            if history_snapshot:
+                self.sio.emit("chat_history", {"messages": history_snapshot}, to=sid)
 
         @self.sio.event
         def disconnect(sid):
@@ -74,11 +82,15 @@ class ChatServer:
                     return
 
                 self.clients[sid] = username
-                # Notify all clients (including the new one) with the updated user list
-                self.sio.emit(
-                    "update_user_list", {"users": list(self.clients.values())}
-                )
-                logging.info(f"User registered: {username} with SID: {sid}")
+                users_snapshot = list(self.clients.values())
+                history_snapshot = list(self.public_history)
+
+            # Notify all clients (including the new one) with the updated user list
+            self.sio.emit("update_user_list", {"users": users_snapshot})
+            logging.info(f"User registered: {username} with SID: {sid}")
+
+            if history_snapshot:
+                self.sio.emit("chat_history", {"messages": history_snapshot}, to=sid)
 
         @self.sio.event
         def message(sid, data):
@@ -110,6 +122,12 @@ class ChatServer:
                         "timestamp"
                     ),  # Forward the timestamp for latency calculation
                 }
+
+                with self.lock:
+                    self.public_history.append(broadcast_data)
+                    if len(self.public_history) > MAX_PUBLIC_HISTORY:
+                        self.public_history.pop(0)
+
                 # Emit to all clients. By removing `skip_sid`, the sender will also receive their own message.
                 self.sio.emit("message", broadcast_data)
 
@@ -202,6 +220,12 @@ class ChatServer:
                 logging.warning(
                     f"Private message failed: invalid format from {sender_username}"
                 )
+
+        @self.sio.event
+        def request_history(sid):
+            with self.lock:
+                history_snapshot = list(self.public_history)
+            self.sio.emit("chat_history", {"messages": history_snapshot}, to=sid)
 
 
 if __name__ == "__main__":

@@ -36,6 +36,153 @@ ApplicationWindow {
         return avatarDefaultColors
     }
 
+    property var privateMessageModels: ({})
+    property var privateDrafts: ({})
+    property string publicDraft: ""
+    property var conversationPages: ({})
+    property int totalUserCount: 0
+
+    function ensurePrivateModel(peer) {
+        if (!peer) {
+            return null
+        }
+        if (!privateMessageModels[peer]) {
+            privateMessageModels[peer] = Qt.createQmlObject('import QtQuick 2.15; ListModel {}', window)
+        }
+        return privateMessageModels[peer]
+    }
+
+    function conversationIndex(key) {
+        for (var i = 0; i < conversationTabsModel.count; ++i) {
+            if (conversationTabsModel.get(i).key === key) {
+                return i
+            }
+        }
+        return -1
+    }
+
+    function setConversationUnread(key, unread) {
+        var idx = conversationIndex(key)
+        if (idx >= 0) {
+            conversationTabsModel.setProperty(idx, "hasUnread", unread)
+        }
+    }
+
+    function registerConversationPage(key, page) {
+        conversationPages[key] = page
+    }
+
+    function unregisterConversationPage(key) {
+        delete conversationPages[key]
+    }
+
+    function focusActiveComposer() {
+        var current = conversationTabsModel.count > 0 ? conversationTabsModel.get(conversationTabBar.currentIndex) : null
+        if (!current) {
+            return
+        }
+        var page = conversationPages[current.key]
+        if (page && page.forceComposerFocus) {
+            page.forceComposerFocus()
+        }
+    }
+
+    function onConversationActivated(index) {
+        if (index < 0 || index >= conversationTabsModel.count) {
+            return
+        }
+        var key = conversationTabsModel.get(index).key
+        setConversationUnread(key, false)
+        focusActiveComposer()
+        var page = conversationPages[key]
+        if (page && page.scrollToEnd) {
+            page.scrollToEnd(false)
+        }
+    }
+
+    function appendPrivateMessage(peer, author, text, isOutgoing) {
+        if (!peer || !text || text.length === 0) {
+            return
+        }
+        if (!author || author.length === 0) {
+            author = isOutgoing === true ? (chatClient.username && chatClient.username.length > 0 ? chatClient.username : "You") : peer
+        }
+        var model = ensurePrivateModel(peer)
+        if (!model) {
+            return
+        }
+        if (conversationIndex(peer) === -1) {
+            conversationTabsModel.append({"key": peer, "title": peer, "isPrivate": true, "hasUnread": false})
+        }
+        model.append({
+            "user": author,
+            "text": text,
+            "isPrivate": true,
+            "isOutgoing": isOutgoing === true,
+            "displayContext": isOutgoing === true ? "You" : author
+        })
+        var idx = conversationIndex(peer)
+        var isActive = idx === conversationTabBar.currentIndex
+        if (!isActive && isOutgoing !== true) {
+            setConversationUnread(peer, true)
+        }
+        var page = conversationPages[peer]
+        if (page && page.scrollToEnd) {
+            page.scrollToEnd(isActive)
+        }
+    }
+
+    function openPrivateConversation(peer) {
+        if (!peer || peer === chatClient.username) {
+            return
+        }
+        ensurePrivateModel(peer)
+        if (conversationIndex(peer) === -1) {
+            conversationTabsModel.append({"key": peer, "title": peer, "isPrivate": true, "hasUnread": false})
+        }
+        var idx = conversationIndex(peer)
+        if (idx >= 0) {
+            conversationTabBar.currentIndex = idx
+            focusActiveComposer()
+        }
+    }
+
+    function closePrivateConversation(peer) {
+        var idx = conversationIndex(peer)
+        if (idx > 0) {
+            var wasCurrent = conversationTabBar.currentIndex === idx
+            conversationTabsModel.remove(idx)
+            unregisterConversationPage(peer)
+            var targetIndex = conversationTabBar.currentIndex
+            if (wasCurrent) {
+                targetIndex = Math.max(0, Math.min(idx - 1, conversationTabsModel.count - 1))
+            }
+            if (targetIndex >= conversationTabsModel.count) {
+                targetIndex = Math.max(0, conversationTabsModel.count - 1)
+            }
+            conversationTabBar.currentIndex = targetIndex
+        }
+    }
+
+    function resetPrivateConversations() {
+        var keys = Object.keys(privateMessageModels)
+        for (var i = 0; i < keys.length; ++i) {
+            var key = keys[i]
+            if (privateMessageModels[key]) {
+                privateMessageModels[key].destroy()
+            }
+        }
+        privateMessageModels = ({})
+        privateDrafts = ({})
+        publicDraft = ""
+        conversationPages = ({})
+        while (conversationTabsModel.count > 1) {
+            conversationTabsModel.remove(conversationTabsModel.count - 1)
+        }
+        setConversationUnread("public", false)
+        conversationTabBar.currentIndex = 0
+    }
+
     background: Rectangle {
         id: backgroundLayer
         anchors.fill: parent
@@ -201,14 +348,18 @@ ApplicationWindow {
                     anchors.fill: parent
                     anchors.margins: 28
 
-                    RowLayout {
-                        anchors.horizontalCenter: parent.horizontalCenter
+                    GridLayout {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
-                        width: parent.width
-                        spacing: 28
+                        columns: 2
+                        columnSpacing: 28
+                        rowSpacing: 0
 
                         // --- Header Welcome Text ---
                         ColumnLayout {
+                            Layout.row: 0
+                            Layout.column: 0
                             Layout.fillWidth: true
                             Layout.alignment: Qt.AlignVCenter
                             spacing: 10
@@ -278,9 +429,11 @@ ApplicationWindow {
 
                         // --- Header User Input ---
                         ColumnLayout {
-                            spacing: 12
+                            Layout.row: 0
+                            Layout.column: 1
                             Layout.preferredWidth: 320
                             Layout.alignment: Qt.AlignVCenter
+                            spacing: 12
 
                             Rectangle {
                                 // *** BUG FIX: Added Layout.fillWidth ***
@@ -453,300 +606,114 @@ ApplicationWindow {
                     ColumnLayout {
                         anchors.fill: parent
                         anchors.margins: 28
-                        spacing: 20
+                        spacing: 16
 
-                        // --- Chat Header ---
-                        RowLayout {
+                        TabBar {
+                            id: conversationTabBar
                             Layout.fillWidth: true
-                            spacing: 12
-
-                            Text {
-                                text: "Salon feed"
-                                color: palette.textPrimary
-                                font.pixelSize: 18
-                                font.bold: true
+                            contentHeight: 38
+                            background: Rectangle {
+                                color: "transparent"
+                                border.width: 0
                             }
+                            Repeater {
+                                model: conversationTabsModel
+                                delegate: TabButton {
+                                    required property string key
+                                    required property string title
+                                    required property bool isPrivate
+                                    required property bool hasUnread
+                                    implicitHeight: conversationTabBar.contentHeight
+                                    padding: 0
+                                    text: title
+                                    checkable: true
+                                    checked: TabBar.index === conversationTabBar.currentIndex
+                                    font.pixelSize: 12
+                                    background: Rectangle {
+                                        radius: 16
+                                        color: checked ? window.palette.canvas : window.palette.surface
+                                        border.color: checked ? window.palette.accent : window.palette.outline
+                                        border.width: checked ? 1 : 0
+                                    }
+                                    contentItem: Item {
+                                        anchors.fill: parent
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.margins: 10
+                                            spacing: 8
 
-                            Rectangle {
-                                Layout.preferredWidth: 6
-                                Layout.preferredHeight: 6
-                                radius: 3
-                                color: palette.accent
-                                Layout.alignment: Qt.AlignVCenter
-                            }
+                                            Text {
+                                                text: title
+                                                color: window.palette.textPrimary
+                                                font.pixelSize: 12
+                                                font.bold: checked
+                                                Layout.alignment: Qt.AlignVCenter
+                                            }
 
-                            Text {
-                                text: usersModel.count > 0 ? usersModel.count + " guests mingling" : "Awaiting first arrival"
-                                color: palette.textSecondary
-                                font.pixelSize: 12
-                                Layout.alignment: Qt.AlignVCenter
+                                            Rectangle {
+                                                Layout.preferredWidth: 6
+                                                Layout.preferredHeight: 6
+                                                radius: 3
+                                                color: window.palette.accent
+                                                Layout.alignment: Qt.AlignVCenter
+                                                visible: hasUnread
+                                            }
+
+                                            Item {
+                                                Layout.fillWidth: true
+                                                Layout.alignment: Qt.AlignVCenter
+                                            }
+
+                                            Item {
+                                                Layout.preferredWidth: isPrivate ? 20 : 0
+                                                Layout.fillHeight: true
+                                                visible: isPrivate
+
+                                                MouseArea {
+                                                    anchors.fill: parent
+                                                    hoverEnabled: true
+                                                    onClicked: window.closePrivateConversation(key)
+
+                                                    Text {
+                                                        anchors.centerIn: parent
+                                                        text: "\u2715"
+                                                        color: window.palette.textSecondary
+                                                        font.pixelSize: 12
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    onClicked: conversationTabBar.currentIndex = TabBar.index
+                                }
                             }
                         }
 
-                        // --- Chat Message Area ---
-                        Flickable {
-                            id: scrollArea
+                        StackLayout {
+                            id: conversationStack
                             Layout.fillWidth: true
                             Layout.fillHeight: true
-                            clip: true
-                            property bool autoStickToBottom: true
-                            contentWidth: chatColumn.width
-                            contentHeight: chatColumn.height
-                            boundsBehavior: Flickable.DragAndOvershootBounds
+                            currentIndex: conversationTabBar.currentIndex
+                            onCurrentIndexChanged: window.onConversationActivated(currentIndex)
 
-                            Component.onCompleted: scrollToEnd(false)
-
-                            Column {
-                                id: chatColumn
-                                width: scrollArea.width
-                                spacing: 20
-
-                                Repeater {
-                                    model: messagesModel
-                                    delegate: messageDelegateComponent
-                                }
-
-                                Item {
-                                    width: parent.width
-                                    height: 12
-                                }
-                            }
-
-                            ScrollIndicator.vertical: ScrollIndicator {
-                                anchors.right: parent.right
-                                anchors.rightMargin: 0
-                                anchors.top: parent.top
-                                anchors.bottom: parent.bottom
-                                contentItem: Rectangle {
-                                    radius: 2
-                                    color: palette.accent
-                                }
-                            }
-
-                            onContentHeightChanged: scrollToEnd(autoStickToBottom)
-                            onContentYChanged: {
-                                if ((moving || dragging) && !atYEnd) {
-                                    autoStickToBottom = false
-                                } else if (!moving && !dragging && atYEnd) {
-                                    autoStickToBottom = true
-                                }
-                            }
-                            onMovementStarted: {
-                                if (!atYEnd) {
-                                    autoStickToBottom = false
-                                }
-                            }
-                            onMovementEnded: {
-                                if (atYEnd) {
-                                    autoStickToBottom = true
-                                }
-                            }
-                            onDraggingChanged: {
-                                if (dragging && !atYEnd) {
-                                    autoStickToBottom = false
-                                } else if (!dragging && atYEnd) {
-                                    autoStickToBottom = true
-                                }
-                            }
-
-                            NumberAnimation {
-                                id: scrollAnimation
-                                target: scrollArea
-                                property: "contentY"
-                                duration: 220
-                                easing.type: Easing.InOutQuad
-                            }
-
-                            function scrollToEnd(animated) {
-                                var target = Math.max(0, contentHeight - height)
-                                if (Math.abs(contentY - target) < 0.5) {
-                                    return
-                                }
-                                if (animated) {
-                                    scrollAnimation.stop()
-                                    scrollAnimation.from = contentY
-                                    scrollAnimation.to = target
-                                    scrollAnimation.restart()
-                                } else {
-                                    scrollAnimation.stop()
-                                    contentY = target
-                                }
-                            }
-                        }
-
-                        // --- Chat Input Bar ---
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 84
-                            radius: 22
-                            color: window.palette.surface
-                            border.color: window.palette.outline
-                            border.width: 1
-
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.margins: 18
-                                spacing: 16
-
-                                Rectangle {
-                                    id: messageFieldFrame
+                            Repeater {
+                                model: conversationTabsModel
+                                delegate: Loader {
                                     Layout.fillWidth: true
-                                    Layout.preferredHeight: 48
-                                    radius: 16
-                                    color: window.palette.canvas
-                                    border.color: messageField.activeFocus ? window.palette.accent : window.palette.outline
-                                    border.width: 1
-                                    property real rippleProgress: 0
-                                    Behavior on border.color {
-                                        ColorAnimation {
-                                            duration: 180
-                                            easing.type: Easing.OutQuad
+                                    Layout.fillHeight: true
+                                    sourceComponent: isPrivate ? privateConversationComponent : publicConversationComponent
+                                    onLoaded: {
+                                        if (sourceComponent === privateConversationComponent) {
+                                            item.setup(key, title, window.ensurePrivateModel(key))
+                                        } else if (sourceComponent === publicConversationComponent) {
+                                            item.setup()
                                         }
+                                        window.registerConversationPage(key, item)
                                     }
-
-                                    Rectangle {
-                                        id: rippleOverlay
-                                        anchors.fill: parent
-                                        radius: parent.radius
-                                        color: "transparent"
-                                        border.width: 0
-                                        opacity: messageField.activeFocus ? 0.35 : 0.0
-                                        visible: opacity > 0
-                                        gradient: Gradient {
-                                            GradientStop {
-                                                position: Math.max(0.0, messageFieldFrame.rippleProgress - 0.2)
-                                                color: "#00FFFFFF"
-                                            }
-                                            GradientStop {
-                                                position: Math.max(0.0, Math.min(1.0, messageFieldFrame.rippleProgress))
-                                                color: window.palette.accent
-                                            }
-                                            GradientStop {
-                                                position: Math.min(1.0, messageFieldFrame.rippleProgress + 0.2)
-                                                color: "#00FFFFFF"
-                                            }
-                                        }
-                                        Behavior on opacity {
-                                            NumberAnimation {
-                                                duration: 220
-                                                easing.type: Easing.OutQuad
-                                            }
-                                        }
-                                    }
-
-                                    NumberAnimation {
-                                        id: rippleAnimator
-                                        target: messageFieldFrame
-                                        property: "rippleProgress"
-                                        from: 0
-                                        to: 1
-                                        duration: 520
-                                        easing.type: Easing.OutQuad
-                                    }
-
-                                    TextField {
-                                        id: messageField
-                                        anchors.fill: parent
-                                        leftPadding: 18
-                                        rightPadding: 18
-                                        topPadding: 12
-                                        bottomPadding: 12
-                                        placeholderText: "Contribute to the salon or /msg <guest> <message>"
-                                        placeholderTextColor: window.palette.textSecondary
-                                        color: window.palette.textPrimary
-                                        selectionColor: window.palette.accent
-                                        selectedTextColor: window.palette.textPrimary
-                                        verticalAlignment: Text.AlignVCenter
-                                        font.pixelSize: 14
-                                        wrapMode: Text.WordWrap
-                                        cursorDelegate: Rectangle {
-                                            width: 2
-                                            color: window.palette.accent
-                                        }
-                                        background: null
-                                        selectByMouse: true
-                                        onAccepted: sendButton.clicked()
-                                        onActiveFocusChanged: {
-                                            if (activeFocus) {
-                                                messageFieldFrame.rippleProgress = 0
-                                                rippleAnimator.restart()
-                                            } else {
-                                                rippleAnimator.stop()
-                                                messageFieldFrame.rippleProgress = 0
-                                            }
-                                        }
-                                    }
-                                }
-
-                                Button {
-                                    id: sendButton
-                                    Layout.preferredWidth: 124
-                                    Layout.preferredHeight: 48
-                                    padding: 0
-                                    topPadding: 0
-                                    bottomPadding: 0
-                                    leftPadding: 0
-                                    rightPadding: 0
-                                    transformOrigin: Item.Center
-                                    scale: down ? 0.95 : (hovered ? 1.05 : 1.0)
-                                    Behavior on scale {
-                                        NumberAnimation {
-                                            duration: 160
-                                            easing.type: Easing.OutQuad
-                                        }
-                                    }
-                                    background: Rectangle {
-                                        id: sendBackground
-                                        radius: 22
-                                        border.width: 0
-                                        gradient: Gradient {
-                                            GradientStop { position: 0.0; color: palette.accentBold }
-                                            GradientStop { position: 1.0; color: palette.accent }
-                                        }
-                                        Rectangle {
-                                            anchors.fill: parent
-                                            radius: parent.radius
-                                            gradient: Gradient {
-                                                GradientStop { position: 0.0; color: "#40FFFFFF" }
-                                                GradientStop { position: 1.0; color: "#00FFFFFF" }
-                                            }
-                                            opacity: sendButton.down ? 0.55 : (sendButton.hovered ? 0.28 : 0.0)
-                                            Behavior on opacity {
-                                                NumberAnimation {
-                                                    duration: 160
-                                                    easing.type: Easing.OutQuad
-                                                }
-                                            }
-                                        }
-                                    }
-                                    contentItem: Text {
-                                        anchors.centerIn: parent
-                                        text: "Send"
-                                        color: palette.panel
-                                        font.pixelSize: 15
-                                        font.bold: true
-                                        horizontalAlignment: Text.AlignHCenter
-                                        verticalAlignment: Text.AlignVCenter
-                                    }
-                                    onClicked: {
-                                        var text = messageField.text
-                                        if (text.length > 0) {
-                                            if (text.startsWith("/msg ")) {
-                                                var parts = text.substring(5).split(" ")
-                                                var recipient = parts.shift()
-                                                var message = parts.join(" ")
-                                                if (recipient && message) {
-                                                    chatClient.sendPrivateMessage(recipient, message)
-                                                    messagesModel.append({
-                                                        "user": "To " + recipient,
-                                                        "text": message,
-                                                        "isPrivate": true
-                                                    })
-                                                }
-                                            } else {
-                                                chatClient.sendMessage(text)
-                                            }
-                                            messageField.text = ""
+                                    onItemChanged: {
+                                        if (!item) {
+                                            window.unregisterConversationPage(key)
                                         }
                                     }
                                 }
@@ -827,6 +794,10 @@ ApplicationWindow {
     }
 
     // --- MODELS ---
+    ListModel {
+        id: conversationTabsModel
+        ListElement { key: "public"; title: "Salon feed"; isPrivate: false; hasUnread: false }
+    }
     ListModel { id: messagesModel }
     ListModel { id: usersModel }
 
@@ -889,11 +860,647 @@ ApplicationWindow {
 
     // --- COMPONENT DEFINITIONS ---
     Component {
+        id: publicConversationComponent
+
+        ColumnLayout {
+            id: publicConversation
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            spacing: 20
+
+            function setup() {
+                messageField.text = window.publicDraft || ""
+                scrollArea.scrollToEnd(false)
+            }
+
+            function scrollToEnd(animated) {
+                scrollArea.scrollToEnd(animated)
+            }
+
+            function forceComposerFocus() {
+                messageField.forceActiveFocus()
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 12
+
+                Text {
+                    text: "Salon feed"
+                    color: palette.textPrimary
+                    font.pixelSize: 18
+                    font.bold: true
+                }
+
+                Rectangle {
+                    Layout.preferredWidth: 6
+                    Layout.preferredHeight: 6
+                    radius: 3
+                    color: palette.accent
+                    Layout.alignment: Qt.AlignVCenter
+                }
+
+                Text {
+                    text: window.totalUserCount > 0 ? window.totalUserCount + " guests mingling" : "Awaiting first arrival"
+                    color: palette.textSecondary
+                    font.pixelSize: 12
+                    Layout.alignment: Qt.AlignVCenter
+                }
+            }
+
+            Flickable {
+                id: scrollArea
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                property bool autoStickToBottom: true
+                contentWidth: chatColumn.width
+                contentHeight: chatColumn.height
+                boundsBehavior: Flickable.DragAndOvershootBounds
+
+                Component.onCompleted: scrollToEnd(false)
+
+                Column {
+                    id: chatColumn
+                    width: scrollArea.width
+                    spacing: 20
+
+                    Repeater {
+                        model: messagesModel
+                        delegate: messageDelegateComponent
+                    }
+
+                    Item {
+                        width: parent.width
+                        height: 12
+                    }
+                }
+
+                ScrollIndicator.vertical: ScrollIndicator {
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    contentItem: Rectangle {
+                        radius: 2
+                        color: palette.accent
+                    }
+                }
+
+                onContentHeightChanged: scrollToEnd(autoStickToBottom)
+                onContentYChanged: {
+                    if ((moving || dragging) && !atYEnd) {
+                        autoStickToBottom = false
+                    } else if (!moving && !dragging && atYEnd) {
+                        autoStickToBottom = true
+                    }
+                }
+                onMovementStarted: {
+                    if (!atYEnd) {
+                        autoStickToBottom = false
+                    }
+                }
+                onMovementEnded: {
+                    if (atYEnd) {
+                        autoStickToBottom = true
+                    }
+                }
+                onDraggingChanged: {
+                    if (dragging && !atYEnd) {
+                        autoStickToBottom = false
+                    } else if (!dragging && atYEnd) {
+                        autoStickToBottom = true
+                    }
+                }
+
+                NumberAnimation {
+                    id: scrollAnimation
+                    target: scrollArea
+                    property: "contentY"
+                    duration: 220
+                    easing.type: Easing.InOutQuad
+                }
+
+                function scrollToEnd(animated) {
+                    var target = Math.max(0, contentHeight - height)
+                    if (Math.abs(contentY - target) < 0.5) {
+                        return
+                    }
+                    if (animated) {
+                        if (!autoStickToBottom) {
+                            return
+                        }
+                        scrollAnimation.stop()
+                        scrollAnimation.from = contentY
+                        scrollAnimation.to = target
+                        scrollAnimation.restart()
+                    } else {
+                        scrollAnimation.stop()
+                        contentY = target
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 84
+                radius: 22
+                color: window.palette.surface
+                border.color: window.palette.outline
+                border.width: 1
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.margins: 18
+                    spacing: 16
+
+                    Rectangle {
+                        id: messageFieldFrame
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 48
+                        radius: 16
+                        color: window.palette.canvas
+                        border.color: messageField.activeFocus ? window.palette.accent : window.palette.outline
+                        border.width: 1
+                        property real rippleProgress: 0
+                        Behavior on border.color {
+                            ColorAnimation {
+                                duration: 180
+                                easing.type: Easing.OutQuad
+                            }
+                        }
+
+                        Rectangle {
+                            id: rippleOverlay
+                            anchors.fill: parent
+                            radius: parent.radius
+                            color: "transparent"
+                            border.width: 0
+                            opacity: messageField.activeFocus ? 0.35 : 0.0
+                            visible: opacity > 0
+                            gradient: Gradient {
+                                GradientStop {
+                                    position: Math.max(0.0, messageFieldFrame.rippleProgress - 0.2)
+                                    color: "#00FFFFFF"
+                                }
+                                GradientStop {
+                                    position: Math.max(0.0, Math.min(1.0, messageFieldFrame.rippleProgress))
+                                    color: window.palette.accent
+                                }
+                                GradientStop {
+                                    position: Math.min(1.0, messageFieldFrame.rippleProgress + 0.2)
+                                    color: "#00FFFFFF"
+                                }
+                            }
+                            Behavior on opacity {
+                                NumberAnimation {
+                                    duration: 220
+                                    easing.type: Easing.OutQuad
+                                }
+                            }
+                        }
+
+                        NumberAnimation {
+                            id: rippleAnimator
+                            target: messageFieldFrame
+                            property: "rippleProgress"
+                            from: 0
+                            to: 1
+                            duration: 520
+                            easing.type: Easing.OutQuad
+                        }
+
+                        TextField {
+                            id: messageField
+                            anchors.fill: parent
+                            leftPadding: 18
+                            rightPadding: 18
+                            topPadding: 12
+                            bottomPadding: 12
+                            placeholderText: "Share something with the lounge"
+                            placeholderTextColor: window.palette.textSecondary
+                            color: window.palette.textPrimary
+                            selectionColor: window.palette.accent
+                            selectedTextColor: window.palette.textPrimary
+                            verticalAlignment: Text.AlignVCenter
+                            font.pixelSize: 14
+                            wrapMode: Text.WordWrap
+                            cursorDelegate: Rectangle {
+                                width: 2
+                                color: window.palette.accent
+                            }
+                            background: null
+                            selectByMouse: true
+                            onAccepted: sendButton.clicked()
+                            onActiveFocusChanged: {
+                                if (activeFocus) {
+                                    messageFieldFrame.rippleProgress = 0
+                                    rippleAnimator.restart()
+                                } else {
+                                    rippleAnimator.stop()
+                                    messageFieldFrame.rippleProgress = 0
+                                }
+                            }
+                            onTextChanged: {
+                                window.publicDraft = text
+                            }
+                        }
+                    }
+
+                    Button {
+                        id: sendButton
+                        Layout.preferredWidth: 124
+                        Layout.preferredHeight: 48
+                        padding: 0
+                        topPadding: 0
+                        bottomPadding: 0
+                        leftPadding: 0
+                        rightPadding: 0
+                        transformOrigin: Item.Center
+                        scale: down ? 0.95 : (hovered ? 1.05 : 1.0)
+                        Behavior on scale {
+                            NumberAnimation {
+                                duration: 160
+                                easing.type: Easing.OutQuad
+                            }
+                        }
+                        background: Rectangle {
+                            id: sendBackground
+                            radius: 22
+                            border.width: 0
+                            gradient: Gradient {
+                                GradientStop { position: 0.0; color: palette.accentBold }
+                                GradientStop { position: 1.0; color: palette.accent }
+                            }
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: parent.radius
+                                gradient: Gradient {
+                                    GradientStop { position: 0.0; color: "#40FFFFFF" }
+                                    GradientStop { position: 1.0; color: "#00FFFFFF" }
+                                }
+                                opacity: sendButton.down ? 0.55 : (sendButton.hovered ? 0.28 : 0.0)
+                                Behavior on opacity {
+                                    NumberAnimation {
+                                        duration: 160
+                                        easing.type: Easing.OutQuad
+                                    }
+                                }
+                            }
+                        }
+                        contentItem: Text {
+                            anchors.centerIn: parent
+                            text: "Send"
+                            color: palette.panel
+                            font.pixelSize: 15
+                            font.bold: true
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        onClicked: {
+                            var text = messageField.text.trim()
+                            if (text.length > 0) {
+                                chatClient.sendMessage(text)
+                                messageField.text = ""
+                                window.publicDraft = ""
+                                scrollArea.scrollToEnd(true)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Component {
+        id: privateConversationComponent
+
+        ColumnLayout {
+            id: privateConversation
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            spacing: 20
+            property string peerKey: ""
+            property string displayName: ""
+            property var conversationModel: null
+
+            function setup(key, title, model) {
+                peerKey = key || ""
+                displayName = title || key || ""
+                conversationModel = model
+                messageField.text = window.privateDrafts[peerKey] || ""
+                scrollArea.scrollToEnd(false)
+            }
+
+            function scrollToEnd(animated) {
+                scrollArea.scrollToEnd(animated)
+            }
+
+            function forceComposerFocus() {
+                messageField.forceActiveFocus()
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 12
+
+                Text {
+                    text: displayName.length > 0 ? "Private line with " + displayName : "Private line"
+                    color: palette.textPrimary
+                    font.pixelSize: 18
+                    font.bold: true
+                }
+
+                Rectangle {
+                    Layout.preferredWidth: 6
+                    Layout.preferredHeight: 6
+                    radius: 3
+                    color: palette.accent
+                    Layout.alignment: Qt.AlignVCenter
+                }
+
+                Text {
+                    text: "Only you and " + (displayName.length > 0 ? displayName : "this guest") + " can see this thread"
+                    color: palette.textSecondary
+                    font.pixelSize: 12
+                    Layout.alignment: Qt.AlignVCenter
+                    wrapMode: Text.WordWrap
+                }
+            }
+
+            Flickable {
+                id: scrollArea
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                property bool autoStickToBottom: true
+                contentWidth: chatColumn.width
+                contentHeight: chatColumn.height
+                boundsBehavior: Flickable.DragAndOvershootBounds
+
+                Component.onCompleted: scrollToEnd(false)
+
+                Column {
+                    id: chatColumn
+                    width: scrollArea.width
+                    spacing: 20
+
+                    Repeater {
+                        model: privateConversation.conversationModel ? privateConversation.conversationModel : 0
+                        delegate: messageDelegateComponent
+                    }
+
+                    Item {
+                        width: parent.width
+                        height: 12
+                    }
+                }
+
+                ScrollIndicator.vertical: ScrollIndicator {
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    contentItem: Rectangle {
+                        radius: 2
+                        color: palette.accent
+                    }
+                }
+
+                onContentHeightChanged: scrollToEnd(autoStickToBottom)
+                onContentYChanged: {
+                    if ((moving || dragging) && !atYEnd) {
+                        autoStickToBottom = false
+                    } else if (!moving && !dragging && atYEnd) {
+                        autoStickToBottom = true
+                    }
+                }
+                onMovementStarted: {
+                    if (!atYEnd) {
+                        autoStickToBottom = false
+                    }
+                }
+                onMovementEnded: {
+                    if (atYEnd) {
+                        autoStickToBottom = true
+                    }
+                }
+                onDraggingChanged: {
+                    if (dragging && !atYEnd) {
+                        autoStickToBottom = false
+                    } else if (!dragging && atYEnd) {
+                        autoStickToBottom = true
+                    }
+                }
+
+                NumberAnimation {
+                    id: privateScrollAnimation
+                    target: scrollArea
+                    property: "contentY"
+                    duration: 220
+                    easing.type: Easing.InOutQuad
+                }
+
+                function scrollToEnd(animated) {
+                    var target = Math.max(0, contentHeight - height)
+                    if (Math.abs(contentY - target) < 0.5) {
+                        return
+                    }
+                    if (animated) {
+                        if (!autoStickToBottom) {
+                            return
+                        }
+                        privateScrollAnimation.stop()
+                        privateScrollAnimation.from = contentY
+                        privateScrollAnimation.to = target
+                        privateScrollAnimation.restart()
+                    } else {
+                        privateScrollAnimation.stop()
+                        contentY = target
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 84
+                radius: 22
+                color: window.palette.surface
+                border.color: window.palette.outline
+                border.width: 1
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.margins: 18
+                    spacing: 16
+
+                    Rectangle {
+                        id: privateMessageFieldFrame
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 48
+                        radius: 16
+                        color: window.palette.canvas
+                        border.color: messageField.activeFocus ? window.palette.accent : window.palette.outline
+                        border.width: 1
+                        property real rippleProgress: 0
+                        Behavior on border.color {
+                            ColorAnimation {
+                                duration: 180
+                                easing.type: Easing.OutQuad
+                            }
+                        }
+
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: parent.radius
+                            color: "transparent"
+                            border.width: 0
+                            opacity: messageField.activeFocus ? 0.35 : 0.0
+                            visible: opacity > 0
+                            gradient: Gradient {
+                                GradientStop {
+                                    position: Math.max(0.0, privateMessageFieldFrame.rippleProgress - 0.2)
+                                    color: "#00FFFFFF"
+                                }
+                                GradientStop {
+                                    position: Math.max(0.0, Math.min(1.0, privateMessageFieldFrame.rippleProgress))
+                                    color: window.palette.accent
+                                }
+                                GradientStop {
+                                    position: Math.min(1.0, privateMessageFieldFrame.rippleProgress + 0.2)
+                                    color: "#00FFFFFF"
+                                }
+                            }
+                            Behavior on opacity {
+                                NumberAnimation {
+                                    duration: 220
+                                    easing.type: Easing.OutQuad
+                                }
+                            }
+                        }
+
+                        NumberAnimation {
+                            id: privateRippleAnimator
+                            target: privateMessageFieldFrame
+                            property: "rippleProgress"
+                            from: 0
+                            to: 1
+                            duration: 520
+                            easing.type: Easing.OutQuad
+                        }
+
+                        TextField {
+                            id: messageField
+                            anchors.fill: parent
+                            leftPadding: 18
+                            rightPadding: 18
+                            topPadding: 12
+                            bottomPadding: 12
+                            placeholderText: displayName.length > 0 ? "Whisper to " + displayName : "Whisper to this guest"
+                            placeholderTextColor: window.palette.textSecondary
+                            color: window.palette.textPrimary
+                            selectionColor: window.palette.accent
+                            selectedTextColor: window.palette.textPrimary
+                            verticalAlignment: Text.AlignVCenter
+                            font.pixelSize: 14
+                            wrapMode: Text.WordWrap
+                            cursorDelegate: Rectangle {
+                                width: 2
+                                color: window.palette.accent
+                            }
+                            background: null
+                            selectByMouse: true
+                            onAccepted: sendButton.clicked()
+                            onActiveFocusChanged: {
+                                if (activeFocus) {
+                                    privateMessageFieldFrame.rippleProgress = 0
+                                    privateRippleAnimator.restart()
+                                } else {
+                                    privateRippleAnimator.stop()
+                                    privateMessageFieldFrame.rippleProgress = 0
+                                }
+                            }
+                            onTextChanged: {
+                                if (peerKey.length > 0) {
+                                    window.privateDrafts[peerKey] = text
+                                }
+                            }
+                        }
+                    }
+
+                    Button {
+                        id: sendButton
+                        Layout.preferredWidth: 124
+                        Layout.preferredHeight: 48
+                        padding: 0
+                        topPadding: 0
+                        bottomPadding: 0
+                        leftPadding: 0
+                        rightPadding: 0
+                        transformOrigin: Item.Center
+                        scale: down ? 0.95 : (hovered ? 1.05 : 1.0)
+                        Behavior on scale {
+                            NumberAnimation {
+                                duration: 160
+                                easing.type: Easing.OutQuad
+                            }
+                        }
+                        background: Rectangle {
+                            radius: 22
+                            border.width: 0
+                            gradient: Gradient {
+                                GradientStop { position: 0.0; color: palette.accentBold }
+                                GradientStop { position: 1.0; color: palette.accent }
+                            }
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: parent.radius
+                                gradient: Gradient {
+                                    GradientStop { position: 0.0; color: "#40FFFFFF" }
+                                    GradientStop { position: 1.0; color: "#00FFFFFF" }
+                                }
+                                opacity: sendButton.down ? 0.55 : (sendButton.hovered ? 0.28 : 0.0)
+                                Behavior on opacity {
+                                    NumberAnimation {
+                                        duration: 160
+                                        easing.type: Easing.OutQuad
+                                    }
+                                }
+                            }
+                        }
+                        contentItem: Text {
+                            anchors.centerIn: parent
+                            text: "Send"
+                            color: palette.panel
+                            font.pixelSize: 15
+                            font.bold: true
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        onClicked: {
+                            if (peerKey.length === 0) {
+                                return
+                            }
+                            var text = messageField.text.trim()
+                            if (text.length > 0) {
+                                chatClient.sendPrivateMessage(peerKey, text)
+                                window.appendPrivateMessage(peerKey, chatClient.username.length > 0 ? chatClient.username : "You", text, true)
+                                messageField.text = ""
+                                window.privateDrafts[peerKey] = ""
+                                window.setConversationUnread(peerKey, false)
+                                scrollArea.scrollToEnd(true)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Component {
         id: messageDelegateComponent
 
         Column {
             id: messageContainer
-            width: parent.width
+            width: parent ? parent.width : 0
             spacing: 6
             property bool isFirst: index === 0
             property bool isSystem: model.user === "System"
@@ -930,7 +1537,7 @@ ApplicationWindow {
             }
 
             Text {
-                text: model.isPrivate ? model.user + " • private channel" : model.user
+                text: model.displayContext !== undefined ? model.displayContext : (model.isPrivate ? model.user + " • private channel" : model.user)
                 color: model.isPrivate ? palette.accent : palette.textSecondary
                 font.pixelSize: 12
                 font.bold: true
@@ -942,9 +1549,9 @@ ApplicationWindow {
                 id: messageBubble
                 width: parent.width
                 radius: 18
-                color: messageContainer.isSystem ? palette.accentSoft : (model.isPrivate ? palette.accentSoft : palette.card)
+                color: messageContainer.isSystem ? palette.accentSoft : (model.isPrivate ? ((model.isOutgoing === true) ? palette.card : palette.accentSoft) : palette.card)
                 border.width: 1
-                property color baseBorder: messageContainer.isSystem ? palette.accent : (model.isPrivate ? palette.accent : palette.canvas)
+                property color baseBorder: messageContainer.isSystem ? palette.accent : (model.isPrivate ? ((model.isOutgoing === true) ? palette.canvas : palette.accent) : palette.canvas)
                 border.color: baseBorder
                 Behavior on border.color {
                     ColorAnimation {
@@ -1032,10 +1639,7 @@ ApplicationWindow {
                 id: mouseArea
                 anchors.fill: parent
                 hoverEnabled: true
-                onClicked: {
-                    messageField.text = "/msg " + name + " "
-                    messageField.forceActiveFocus()
-                }
+                onClicked: window.openPrivateConversation(name)
             }
 
             RowLayout {
@@ -1141,31 +1745,71 @@ ApplicationWindow {
                 "text": message,
                 "isPrivate": false
             })
+            var idx = window.conversationIndex("public")
+            var isActive = idx === conversationTabBar.currentIndex
+            if (!isActive) {
+                window.setConversationUnread("public", true)
+            }
+            var page = window.conversationPages["public"]
+            if (page && page.scrollToEnd) {
+                page.scrollToEnd(isActive)
+            }
+        }
+
+        function onGeneralHistoryReceived(history) {
+            messagesModel.clear()
+            if (!history) {
+                return
+            }
+            for (var i = 0; i < history.length; ++i) {
+                var entry = history[i]
+                if (!entry) {
+                    continue
+                }
+                messagesModel.append({
+                    "user": entry.username ? entry.username : "Unknown",
+                    "text": entry.message ? entry.message : "",
+                    "isPrivate": false
+                })
+            }
+            window.setConversationUnread("public", false)
+            var page = window.conversationPages["public"]
+            if (page && page.scrollToEnd) {
+                page.scrollToEnd(false)
+            }
         }
 
         function onPrivateMessageReceived(sender, recipient, message) {
-            messagesModel.append({
-                "user": "From " + sender,
-                "text": message,
-                "isPrivate": true
-            })
+            var currentUser = chatClient.username
+            var isOutgoing = sender === currentUser
+            var peer = isOutgoing ? recipient : sender
+            if (!peer || peer.length === 0) {
+                return
+            }
+            window.appendPrivateMessage(peer, sender, message, isOutgoing)
         }
 
         function onUsersUpdated(users) {
             usersModel.clear()
+            window.totalUserCount = users.length
             for (var i = 0; i < users.length; i++) {
-                usersModel.append({"name": users[i]})
+                if (users[i] !== chatClient.username) {
+                    usersModel.append({"name": users[i]})
+                }
             }
         }
 
         function onDisconnected() {
             messagesModel.clear()
             usersModel.clear()
+            window.totalUserCount = 0
+            window.resetPrivateConversations()
             messagesModel.append({
                 "user": "System",
                 "text": "You have been disconnected.",
                 "isPrivate": false
             })
+            window.setConversationUnread("public", false)
             disconnectAnimation.restart()
         }
 
@@ -1175,12 +1819,21 @@ ApplicationWindow {
                 "text": message,
                 "isPrivate": false
             })
+            var idx = window.conversationIndex("public")
+            var isActive = idx === conversationTabBar.currentIndex
+            if (!isActive) {
+                window.setConversationUnread("public", true)
+            }
+            var page = window.conversationPages["public"]
+            if (page && page.scrollToEnd) {
+                page.scrollToEnd(isActive)
+            }
         }
 
         function onUsernameChanged(name) {
             usernameField.text = name
             if (name.length > 0) {
-                messageField.forceActiveFocus()
+                window.focusActiveComposer()
             }
         }
     }

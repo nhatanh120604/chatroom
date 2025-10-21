@@ -14,6 +14,7 @@ class ChatClient(QObject):
     disconnected = Signal()  # Signal to notify QML of disconnection
     errorReceived = Signal(str)  # Notify UI about errors
     usernameChanged = Signal(str)  # Notify UI when username changes
+    generalHistoryReceived = Signal("QVariant")  # Provide public chat history snapshot
 
     def __init__(self, url="http://localhost:5000"):
         super().__init__()
@@ -27,6 +28,7 @@ class ChatClient(QObject):
         self._connect_lock = threading.Lock()
         self._pending_lock = threading.Lock()
         self._pending_events = []
+        self._history_synced = False
         self._setup_handlers()
 
     def _setup_handlers(self):
@@ -60,6 +62,7 @@ class ChatClient(QObject):
             self.usersUpdated.emit([])
             self._set_username("")
             self.disconnected.emit()  # Notify the UI
+            self._history_synced = False
 
         @self._sio.on("message")
         def on_message(data):
@@ -84,6 +87,11 @@ class ChatClient(QObject):
             elif self._username and self._username not in users:
                 self._set_username("")
             self.usersUpdated.emit(self._users.copy())
+
+        @self._sio.on("chat_history")
+        def on_chat_history(data):
+            messages = data.get("messages", [])
+            self.generalHistoryReceived.emit(messages)
 
         @self._sio.on("error")
         def on_error(data):
@@ -145,6 +153,16 @@ class ChatClient(QObject):
         if self._username != value:
             self._username = value
             self.usernameChanged.emit(self._username)
+            if self._username:
+                self._ensure_history_synced()
+            else:
+                self._history_synced = False
+
+    def _ensure_history_synced(self):
+        if self._history_synced:
+            return
+        self._emit_when_connected("request_history", {})
+        self._history_synced = True
 
     @Slot(str)
     def register(self, username: str):
