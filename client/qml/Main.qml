@@ -22,7 +22,7 @@ ApplicationWindow {
         card: "#1A2738",
         canvas: "#1F2D40",
         accent: "#E0C184",
-        accentSoft: "#E0C18426",
+    accentSoft: "#26E0C184",
         accentBold: "#F3DCA3",
         textPrimary: "#F4F7FB",
         textSecondary: "#A5AEC1",
