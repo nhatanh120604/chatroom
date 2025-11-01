@@ -32,7 +32,9 @@ MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB safety cap
 
 class ChatClient(QObject):
     messageReceived = Signal(str, str, "QVariant")  # username, message, file payload
-    messageReceivedEx = Signal(str, str, "QVariant", str)  # username, message, file payload, timestamp
+    messageReceivedEx = Signal(
+        str, str, "QVariant", str
+    )  # username, message, file payload, timestamp
     privateMessageReceived = Signal(
         str, str, str, int, str, "QVariant"
     )  # sender, recipient, message, message_id, status, file payload
@@ -53,7 +55,9 @@ class ChatClient(QObject):
     errorReceived = Signal(str)  # Notify UI about errors
     usernameChanged = Signal(str)  # Notify UI when username changes
     generalHistoryReceived = Signal("QVariant")  # Provide public chat history snapshot
-    fileTransferProgress = Signal(str, int, int)  # transfer_id, current_chunk, total_chunks
+    fileTransferProgress = Signal(
+        str, int, int
+    )  # transfer_id, current_chunk, total_chunks
     fileTransferComplete = Signal(str, str)  # transfer_id, filename
     fileTransferError = Signal(str, str)  # transfer_id, error_message
 
@@ -72,7 +76,7 @@ class ChatClient(QObject):
         self._history_synced = False
         self._public_typing_flag = False
         self._private_typing_flags = {}
-        
+
         # Session AES key (exchanged with server via RSA)
         self._session_aes_key: Optional[bytes] = None
         self._session_ready: bool = False
@@ -82,7 +86,7 @@ class ChatClient(QObject):
         self._transfer_lock = threading.Lock()
         self._completed_transfers = set()
         self._debug_enabled = True
-        
+
         self._setup_handlers()
 
     def _dbg(self, *args):
@@ -228,9 +232,9 @@ class ChatClient(QObject):
                 self._set_username(self._desired_username)
             elif self._username and self._username not in users:
                 self._set_username("")
-            
+
             # No per-user key exchange under server-managed encryption
-            
+
             self.usersUpdated.emit(self._users.copy())
 
         @self._sio.on("chat_history")
@@ -264,16 +268,22 @@ class ChatClient(QObject):
             chunk_data = data.get("chunk_data")
             is_last_chunk = data.get("is_last_chunk", False)
             metadata = data.get("metadata")
-            
+
             if not all([transfer_id, chunk_index is not None, chunk_data]):
                 self._notify_error("Invalid file chunk received")
                 return
-            
-            self._dbg("file_chunk received:",
-                      "id=", transfer_id,
-                      "idx=", chunk_index,
-                      "last=", is_last_chunk,
-                      "meta?=", bool(metadata))
+
+            self._dbg(
+                "file_chunk received:",
+                "id=",
+                transfer_id,
+                "idx=",
+                chunk_index,
+                "last=",
+                is_last_chunk,
+                "meta?=",
+                bool(metadata),
+            )
 
             ready_to_reassemble = False
             with self._transfer_lock:
@@ -282,14 +292,16 @@ class ChatClient(QObject):
                     return
                 if transfer_id not in self._received_chunks:
                     self._received_chunks[transfer_id] = {}
-                
+
                 # Store chunk data
-                self._received_chunks[transfer_id][chunk_index] = base64.b64decode(chunk_data)
-                
+                self._received_chunks[transfer_id][chunk_index] = base64.b64decode(
+                    chunk_data
+                )
+
                 # Store metadata from first chunk
                 if metadata and chunk_index == 0:
                     self._active_transfers[transfer_id] = metadata
-                
+
                 # Check if all chunks received (use stored metadata if not provided on this chunk)
                 stored_meta = self._active_transfers.get(transfer_id, {})
                 expected_chunks = 0
@@ -298,17 +310,28 @@ class ChatClient(QObject):
                 elif stored_meta and stored_meta.get("total_chunks"):
                     expected_chunks = int(stored_meta.get("total_chunks", 0))
                 # Fallback to last-chunk index if server did not include total
-                if expected_chunks == 0 and bool(is_last_chunk) and isinstance(chunk_index, int):
+                if (
+                    expected_chunks == 0
+                    and bool(is_last_chunk)
+                    and isinstance(chunk_index, int)
+                ):
                     expected_chunks = int(chunk_index) + 1
                 received_count = len(self._received_chunks[transfer_id])
-                self._dbg("file_chunk progress:",
-                          "id=", transfer_id,
-                          "received=", received_count,
-                          "expected=", expected_chunks)
-                
+                self._dbg(
+                    "file_chunk progress:",
+                    "id=",
+                    transfer_id,
+                    "received=",
+                    received_count,
+                    "expected=",
+                    expected_chunks,
+                )
+
                 # Emit progress
-                self.fileTransferProgress.emit(transfer_id, received_count, expected_chunks)
-                
+                self.fileTransferProgress.emit(
+                    transfer_id, received_count, expected_chunks
+                )
+
                 if received_count >= expected_chunks and expected_chunks > 0:
                     # All chunks received, reassemble file (outside lock to avoid deadlock)
                     ready_to_reassemble = True
@@ -323,12 +346,12 @@ class ChatClient(QObject):
             transfer_id = data.get("transfer_id")
             success = data.get("success", False)
             error_msg = data.get("error", "")
-            
+
             if success:
                 self.fileTransferComplete.emit(transfer_id, "")
             else:
                 self.fileTransferError.emit(transfer_id, error_msg)
-            
+
             # Clean up transfer data
             with self._transfer_lock:
                 self._active_transfers.pop(transfer_id, None)
@@ -464,17 +487,24 @@ class ChatClient(QObject):
         """Reassemble and decrypt received file chunks."""
         try:
             with self._transfer_lock:
-                if transfer_id not in self._active_transfers or transfer_id not in self._received_chunks:
+                if (
+                    transfer_id not in self._active_transfers
+                    or transfer_id not in self._received_chunks
+                ):
                     return
-                
+
                 metadata = self._active_transfers[transfer_id]
                 chunks_dict = self._received_chunks[transfer_id]
-                
+
                 # Sort chunks by index
                 sorted_chunks = [chunks_dict[i] for i in sorted(chunks_dict.keys())]
-                
+
                 # If metadata lacks encryption fields, treat as plaintext
-                if not metadata or metadata.get("encrypted_aes_key") or metadata.get("iv"):
+                if (
+                    not metadata
+                    or metadata.get("encrypted_aes_key")
+                    or metadata.get("iv")
+                ):
                     # Backward compatibility (old encrypted flow not expected now)
                     data_bytes = b"".join(sorted_chunks)
                 else:
@@ -482,14 +512,19 @@ class ChatClient(QObject):
 
                 # Save file to temp directory
                 filename = metadata.get("filename", "received_file")
-                temp_path = self.saveFileToTemp(filename, base64.b64encode(data_bytes).decode('utf-8'), "application/octet-stream")
-                
+                temp_path = self.saveFileToTemp(
+                    filename,
+                    base64.b64encode(data_bytes).decode("utf-8"),
+                    "application/octet-stream",
+                )
+
                 self.fileTransferComplete.emit(transfer_id, filename)
                 print(f"File {filename} received and saved to {temp_path}")
 
                 # Emit a message entry so the UI shows the received file in the chat feed
                 try:
                     import mimetypes as _m
+
                     mime, _ = _m.guess_type(filename)
                     mime = mime or "application/octet-stream"
                 except Exception:
@@ -499,34 +534,53 @@ class ChatClient(QObject):
                 if isinstance(metadata, dict):
                     recipient = metadata.get("recipient", "") or ""
                     # Treat as private if server tagged it or if a recipient is specified
-                    is_private = bool(metadata.get("is_private")) or (len(recipient) > 0)
+                    is_private = bool(metadata.get("is_private")) or (
+                        len(recipient) > 0
+                    )
                 file_payload = {
                     "name": filename,
                     "size": len(data_bytes),
                     "mime": mime,
-                    "data": base64.b64encode(data_bytes).decode('ascii'),
+                    "data": base64.b64encode(data_bytes).decode("ascii"),
                     "is_private": is_private,
                     "recipient": recipient,
                     "transfer_id": transfer_id,
                 }
                 username = metadata.get("username", "Unknown")
                 # Emit directly; Qt will queue the signal to the GUI thread.
-                self._dbg("emitting file message:", username, file_payload.get("name", ""), file_payload.get("size", 0))
+                self._dbg(
+                    "emitting file message:",
+                    username,
+                    file_payload.get("name", ""),
+                    file_payload.get("size", 0),
+                )
                 ts = metadata.get("timestamp") if isinstance(metadata, dict) else ""
                 if not ts:
                     from datetime import datetime, timezone
+
                     ts = datetime.now(timezone.utc).isoformat()
                 if is_private:
                     # Route to private conversation
                     sender = username
                     # Determine outgoing vs incoming
-                    is_outgoing = (self._username and sender == self._username)
+                    is_outgoing = self._username and sender == self._username
                     if is_outgoing:
                         # Sent by us: we already appended optimistically when sending; avoid duplicate
-                        self._dbg("skip duplicate append for sender private file:", transfer_id)
+                        self._dbg(
+                            "skip duplicate append for sender private file:",
+                            transfer_id,
+                        )
                     else:
                         # Received by us
-                        self.privateMessageReceivedEx.emit(sender, recipient or self._username, "", 0, "delivered", file_payload, ts)
+                        self.privateMessageReceivedEx.emit(
+                            sender,
+                            recipient or self._username,
+                            "",
+                            0,
+                            "delivered",
+                            file_payload,
+                            ts,
+                        )
                 else:
                     # Public feed
                     self.messageReceived.emit(username, "", file_payload)
@@ -537,16 +591,20 @@ class ChatClient(QObject):
                     self._completed_transfers.add(transfer_id)
                     self._active_transfers.pop(transfer_id, None)
                     self._received_chunks.pop(transfer_id, None)
-                
+
         except Exception as e:
             self.fileTransferError.emit(transfer_id, f"Failed to reassemble file: {e}")
             print(f"Error reassembling file {transfer_id}: {e}")
 
-    def _send_encrypted_file_chunks(self, file_data: bytes, filename: str, recipient: str = None):
+    def _send_encrypted_file_chunks(
+        self, file_data: bytes, filename: str, recipient: str = None
+    ):
         """Send file in encrypted chunks."""
         try:
             if not self._session_aes_key:
-                self._notify_error("Session key not established; cannot send file securely.")
+                self._notify_error(
+                    "Session key not established; cannot send file securely."
+                )
                 return None
 
             # Encrypt entire file with session AES key
@@ -555,7 +613,10 @@ class ChatClient(QObject):
 
             # Chunk ciphertext
             chunk_size = 64 * 1024
-            chunks = [ciphertext[i:i+chunk_size] for i in range(0, len(ciphertext), chunk_size)]
+            chunks = [
+                ciphertext[i : i + chunk_size]
+                for i in range(0, len(ciphertext), chunk_size)
+            ]
             total_chunks = len(chunks)
             transfer_id = uuid.uuid4().hex
 
@@ -579,6 +640,7 @@ class ChatClient(QObject):
             if recipient:
                 try:
                     import mimetypes as _m
+
                     mime, _ = _m.guess_type(filename)
                     mime = mime or "application/octet-stream"
                 except Exception:
@@ -588,22 +650,27 @@ class ChatClient(QObject):
                     "name": filename,
                     "size": len(file_data),
                     "mime": mime,
-                    "data": base64.b64encode(file_data).decode('ascii'),
+                    "data": base64.b64encode(file_data).decode("ascii"),
                     "is_private": True,
                     "recipient": recipient,
                     "transfer_id": transfer_id,
                 }
                 from datetime import datetime, timezone
+
                 ts = datetime.now(timezone.utc).isoformat()
-                self.privateMessageSent.emit(sender_username, recipient, "", 0, "sent", file_payload)
-                self.privateMessageSentEx.emit(sender_username, recipient, "", 0, "sent", file_payload, ts)
-            
+                self.privateMessageSent.emit(
+                    sender_username, recipient, "", 0, "sent", file_payload
+                )
+                self.privateMessageSentEx.emit(
+                    sender_username, recipient, "", 0, "sent", file_payload, ts
+                )
+
             if recipient:
                 first_chunk["recipient"] = recipient
                 self._emit_post_key("private_file_chunk", first_chunk)
             else:
                 self._emit_post_key("public_file_chunk", first_chunk)
-            
+
             # Send remaining chunks
             for i, chunk_data in enumerate(chunks[1:], 1):
                 chunk = {
@@ -612,23 +679,32 @@ class ChatClient(QObject):
                     "chunk_data": base64.b64encode(chunk_data).decode("utf-8"),
                     "is_last_chunk": i == total_chunks - 1,
                 }
-                self._dbg("sending file chunk:", transfer_id, "idx=", i, "last=", i == total_chunks - 1)
+                self._dbg(
+                    "sending file chunk:",
+                    transfer_id,
+                    "idx=",
+                    i,
+                    "last=",
+                    i == total_chunks - 1,
+                )
                 if recipient:
                     chunk["recipient"] = recipient
                     self._emit_post_key("private_file_chunk", chunk)
                 else:
                     self._emit_post_key("public_file_chunk", chunk)
-                
+
                 # Small delay to prevent overwhelming the server
                 time.sleep(0.01)
-            
+
             return transfer_id
-            
+
         except Exception as e:
             self._notify_error(f"Secure transfer failed: {e}")
             return None
 
-    def _send_unencrypted_file(self, file_data: bytes, filename: str, recipient: str = None):
+    def _send_unencrypted_file(
+        self, file_data: bytes, filename: str, recipient: str = None
+    ):
         """Send file without encryption as fallback."""
         try:
             # Use the original file payload method for unencrypted transfer
@@ -636,22 +712,19 @@ class ChatClient(QObject):
                 "name": filename,
                 "size": len(file_data),
                 "mime": "application/octet-stream",
-                "data": base64.b64encode(file_data).decode('ascii'),
+                "data": base64.b64encode(file_data).decode("ascii"),
             }
-            
+
             if recipient:
-                self._emit_when_connected("private_message", {
-                    "recipient": recipient,
-                    "file": file_payload
-                })
+                self._emit_when_connected(
+                    "private_message", {"recipient": recipient, "file": file_payload}
+                )
             else:
-                self._emit_when_connected("message", {
-                    "file": file_payload
-                })
-            
+                self._emit_when_connected("message", {"file": file_payload})
+
             print(f"Sent unencrypted file: {filename}")
             return f"unencrypted_{uuid.uuid4().hex[:8]}"
-            
+
         except Exception as e:
             self._notify_error(f"Failed to send unencrypted file: {e}")
             return None
@@ -659,7 +732,9 @@ class ChatClient(QObject):
     def _send_secure_text_message(self, text: str):
         try:
             if not self._session_aes_key:
-                self._notify_error("Session key not established; cannot send message securely.")
+                self._notify_error(
+                    "Session key not established; cannot send message securely."
+                )
                 return
             ciphertext, iv = aes_encrypt(text.encode("utf-8"), self._session_aes_key)
             payload = {
@@ -674,7 +749,9 @@ class ChatClient(QObject):
     def _send_secure_private_message(self, recipient: str, text: str):
         try:
             if not self._session_aes_key:
-                self._notify_error("Session key not established; cannot send message securely.")
+                self._notify_error(
+                    "Session key not established; cannot send message securely."
+                )
                 return
             ciphertext, iv = aes_encrypt(text.encode("utf-8"), self._session_aes_key)
             payload = {
@@ -744,29 +821,29 @@ class ChatClient(QObject):
     def sendMessageWithAttachment(self, message: str, file_url: str):
         text = (message or "").strip()
         file_url = (file_url or "").strip()
-        
+
         if file_url:
             # Use encrypted file transfer for file attachments
             file_path = self._normalize_file_path(file_url)
             if not file_path:
                 self._notify_error("Invalid file selection.")
                 return
-            
+
             try:
                 file_data = file_path.read_bytes()
                 filename = file_path.name
-                
+
                 # Send encrypted text message first if any
                 if text:
                     self._send_secure_text_message(text)
-                
+
                 # Send encrypted file
                 transfer_id = self._send_encrypted_file_chunks(file_data, filename)
                 if transfer_id:
                     print(f"Started encrypted file transfer: {transfer_id}")
                 else:
                     self._notify_error("Failed to start encrypted file transfer")
-                    
+
             except Exception as e:
                 self._notify_error(f"Failed to read file: {e}")
         else:
@@ -794,29 +871,31 @@ class ChatClient(QObject):
         if not recip:
             self._notify_error("Recipient is required for private messages.")
             return
-        
+
         if file_url:
             # Use encrypted file transfer for private file attachments
             file_path = self._normalize_file_path(file_url)
             if not file_path:
                 self._notify_error("Invalid file selection.")
                 return
-            
+
             try:
                 file_data = file_path.read_bytes()
                 filename = file_path.name
-                
+
                 # Send encrypted text message first if any
                 if text:
                     self._send_secure_private_message(recip, text)
-                
+
                 # Send encrypted file
-                transfer_id = self._send_encrypted_file_chunks(file_data, filename, recip)
+                transfer_id = self._send_encrypted_file_chunks(
+                    file_data, filename, recip
+                )
                 if transfer_id:
                     print(f"Started encrypted private file transfer: {transfer_id}")
                 else:
                     self._notify_error("Failed to start encrypted file transfer")
-                    
+
             except Exception as e:
                 self._notify_error(f"Failed to read file: {e}")
         else:
@@ -927,8 +1006,13 @@ class ChatClient(QObject):
         # Use OS Downloads directory
         try:
             from PySide6.QtCore import QStandardPaths
-            downloads_path = QStandardPaths.writableLocation(QStandardPaths.DownloadLocation)
-            downloads = Path(downloads_path) if downloads_path else (Path.home() / "Downloads")
+
+            downloads_path = QStandardPaths.writableLocation(
+                QStandardPaths.DownloadLocation
+            )
+            downloads = (
+                Path(downloads_path) if downloads_path else (Path.home() / "Downloads")
+            )
         except Exception:
             downloads = Path.home() / "Downloads"
         try:

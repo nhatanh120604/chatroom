@@ -22,7 +22,7 @@ ApplicationWindow {
         card: "#1A2738",
         canvas: "#1F2D40",
         accent: "#E0C184",
-    accentSoft: "#26E0C184",
+        accentSoft: "#26E0C184",
         accentBold: "#F3DCA3",
         textPrimary: "#F4F7FB",
         textSecondary: "#A5AEC1",
@@ -32,6 +32,22 @@ ApplicationWindow {
     })
 
     readonly property var avatarDefaultColors: ({ top: "#6DE5AE", bottom: "#2C9C6D" })
+
+    readonly property real fontScale: 1.12
+    function scaleFont(size) {
+        return Math.round(size * fontScale)
+    }
+     readonly property string emojiFontFamily: Qt.platform.os === "windows"
+                                                            ? "Segoe UI Emoji"
+                                                            : (Qt.platform.os === "osx"
+                                                                ? "Apple Color Emoji"
+                                                                : "Noto Color Emoji, Noto Emoji, Symbola, DejaVu Sans")
+
+     readonly property string uiFontFamily: Qt.platform.os === "windows"
+                                                         ? "Segoe UI"
+                                                         : (Qt.platform.os === "osx"
+                                                             ? "SF Pro Text"
+                                                             : "Cantarell")
 
     function avatarGradientFor(name) {
         return avatarDefaultColors
@@ -563,7 +579,9 @@ ApplicationWindow {
                     anchors.margins: 28
 
                     GridLayout {
-                        anchors.fill: parent
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
                         columns: 2
                         columnSpacing: 28
                         rowSpacing: 0
@@ -579,7 +597,7 @@ ApplicationWindow {
                             Text {
                                 text: chatClient.username.length > 0 ? "Welcome back, " + chatClient.username : "Aurora Lounge"
                                 color: palette.textPrimary
-                                font.pixelSize: 26
+                                font.pixelSize: window.scaleFont(26)
                                 font.bold: true
                                 Layout.alignment: Qt.AlignVCenter
                             }
@@ -587,7 +605,7 @@ ApplicationWindow {
                             Text {
                                 text: chatClient.username.length > 0 ? "Share a thought with the lounge—your voice sets tonight's tone." : "Reserve a signature name to slip past the velvet rope."
                                 color: palette.textSecondary
-                                font.pixelSize: 14
+                                font.pixelSize: window.scaleFont(14)
                                 wrapMode: Text.WordWrap
                                 Layout.fillWidth: true
                             }
@@ -606,7 +624,7 @@ ApplicationWindow {
                                         anchors.centerIn: parent
                                         text: chatClient.username.length > 0 ? "Enrolled guest" : "Guest access"
                                         color: chatClient.username.length > 0 ? palette.textPrimary : palette.textSecondary
-                                        font.pixelSize: 12
+                                        font.pixelSize: window.scaleFont(12)
                                         font.bold: true
                                     }
                                 }
@@ -633,7 +651,7 @@ ApplicationWindow {
                                             return Qt.formatDateTime(new Date(), "ddd, MMM d • hh:mm ap")
                                         }
                                         color: palette.textSecondary
-                                        font.pixelSize: 12
+                                        font.pixelSize: window.scaleFont(12)
                                     }
                                 }
                             }
@@ -669,7 +687,7 @@ ApplicationWindow {
                                     selectionColor: window.palette.accent
                                     selectedTextColor: window.palette.textPrimary
                                     verticalAlignment: Text.AlignVCenter
-                                    font.pixelSize: 14
+                                    font.pixelSize: window.scaleFont(14)
                                     enabled: chatClient.username.length === 0
                                     cursorDelegate: Rectangle {
                                         width: 2
@@ -738,7 +756,7 @@ ApplicationWindow {
                                         anchors.centerIn: parent
                                         text: chatClient.username.length > 0 ? "Registered" : "Enter the lounge"
                                         color: palette.panel
-                                        font.pixelSize: 14
+                                        font.pixelSize: window.scaleFont(14)
                                         font.bold: true
                                         horizontalAlignment: Text.AlignHCenter
                                         verticalAlignment: Text.AlignVCenter
@@ -771,7 +789,7 @@ ApplicationWindow {
                                         verticalAlignment: Text.AlignVCenter
                                         text: "\u2715"
                                         color: palette.textSecondary
-                                        font.pixelSize: 20
+                                        font.pixelSize: window.scaleFont(20)
                                     }
                                 }
                             }
@@ -840,7 +858,7 @@ ApplicationWindow {
                                     text: title
                                     checkable: true
                                     checked: TabBar.index === conversationTabBar.currentIndex
-                                    font.pixelSize: 12
+                                    font.pixelSize: window.scaleFont(12)
                                     background: Rectangle {
                                         radius: 16
                                         color: checked ? window.palette.canvas : window.palette.surface
@@ -857,7 +875,7 @@ ApplicationWindow {
                                             Text {
                                                 text: title
                                                 color: window.palette.textPrimary
-                                                font.pixelSize: 12
+                                                font.pixelSize: window.scaleFont(12)
                                                 font.bold: checked
                                                 Layout.alignment: Qt.AlignVCenter
                                             }
@@ -890,7 +908,7 @@ ApplicationWindow {
                                                         anchors.centerIn: parent
                                                         text: "\u2715"
                                                         color: window.palette.textSecondary
-                                                        font.pixelSize: 12
+                                                        font.pixelSize: window.scaleFont(12)
                                                     }
                                                 }
                                             }
@@ -971,14 +989,14 @@ ApplicationWindow {
                         Text {
                             text: "Concierge"
                             color: palette.textPrimary
-                            font.pixelSize: 17
+                            font.pixelSize: window.scaleFont(17)
                             font.bold: true
                         }
 
                         Text {
                             text: "Spot a guest, tap to begin a private exchange."
                             color: palette.textSecondary
-                            font.pixelSize: 12
+                            font.pixelSize: window.scaleFont(12)
                             wrapMode: Text.WordWrap
                             Layout.fillWidth: true
                         }
@@ -1103,10 +1121,30 @@ ApplicationWindow {
 
             Menu {
                 id: publicEmojiMenu
+                padding: 8
+                background: Rectangle {
+                    radius: 14
+                    color: window.palette.canvas
+                    border.color: window.palette.outline
+                    border.width: 1
+                }
                 Repeater {
                     model: window.emojiOptions
                     delegate: MenuItem {
-                        text: modelData
+                        width: 44
+                        height: 44
+                        padding: 0
+                        background: Rectangle {
+                            radius: 12
+                            color: hovered ? window.palette.surface : "transparent"
+                        }
+                        contentItem: Text {
+                            anchors.centerIn: parent
+                            text: modelData
+                            font.pixelSize: window.scaleFont(22)
+                            font.family: window.emojiFontFamily
+                            color: window.palette.textPrimary
+                        }
                         onTriggered: {
                             window.insertEmojiIntoField(messageField, modelData)
                             messageField.forceActiveFocus()
@@ -1145,7 +1183,7 @@ ApplicationWindow {
                 Text {
                     text: "Salon feed"
                     color: palette.textPrimary
-                    font.pixelSize: 18
+                    font.pixelSize: window.scaleFont(18)
                     font.bold: true
                 }
 
@@ -1160,7 +1198,7 @@ ApplicationWindow {
                 Text {
                     text: window.totalUserCount > 0 ? window.totalUserCount + " guests mingling" : "Awaiting first arrival"
                     color: palette.textSecondary
-                    font.pixelSize: 12
+                    font.pixelSize: window.scaleFont(12)
                     Layout.alignment: Qt.AlignVCenter
                 }
             }
@@ -1261,7 +1299,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 text: window.publicTypingText
                 color: palette.textSecondary
-                font.pixelSize: 12
+                font.pixelSize: window.scaleFont(12)
                 visible: text && text.length > 0
             }
 
@@ -1350,10 +1388,11 @@ ApplicationWindow {
                                 placeholderText: "Share something with the lounge"
                                 placeholderTextColor: window.palette.textSecondary
                                 color: window.palette.textPrimary
+                                font.family: window.uiFontFamily + ", " + window.emojiFontFamily
                                 selectionColor: window.palette.accent
                                 selectedTextColor: window.palette.textPrimary
                                 verticalAlignment: Text.AlignVCenter
-                                font.pixelSize: 14
+                                font.pixelSize: window.scaleFont(14)
                                 wrapMode: Text.WordWrap
                                 cursorDelegate: Rectangle {
                                     width: 2
@@ -1396,8 +1435,7 @@ ApplicationWindow {
                             property color hoverColor: window.palette.surface
                             property color activeColor: window.palette.accentSoft
                             property color borderColor: window.palette.outline
-                            text: "😊"
-                            font.pixelSize: 20
+                            readonly property url iconSource: Qt.resolvedUrl("../../assets/emoji_icon.svg")
                             onClicked: {
                                 var pos = mapToItem(null, 0, height)
                                 publicEmojiMenu.x = pos.x
@@ -1416,13 +1454,13 @@ ApplicationWindow {
                                     ColorAnimation { duration: 140; easing.type: Easing.OutQuad }
                                 }
                             }
-                            contentItem: Text {
-                                anchors.fill: parent
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                                text: publicEmojiButton.text
-                                color: window.palette.textPrimary
-                                font.pixelSize: publicEmojiButton.font.pixelSize
+                            contentItem: Image {
+                                anchors.centerIn: parent
+                                width: window.scaleFont(24)
+                                height: width
+                                source: publicEmojiButton.iconSource
+                                fillMode: Image.PreserveAspectFit
+                                smooth: true
                             }
                         }
 
@@ -1436,8 +1474,7 @@ ApplicationWindow {
                             property color hoverColor: window.palette.surface
                             property color activeColor: window.palette.accentSoft
                             property color borderColor: window.palette.outline
-                            text: "📎"
-                            font.pixelSize: 18
+                            readonly property url iconSource: Qt.resolvedUrl("../../assets/file_icon.svg")
                             onClicked: publicFileDialog.open()
                             background: Rectangle {
                                 radius: 18
@@ -1451,13 +1488,13 @@ ApplicationWindow {
                                     ColorAnimation { duration: 140; easing.type: Easing.OutQuad }
                                 }
                             }
-                            contentItem: Text {
-                                anchors.fill: parent
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                                text: publicFileButton.text
-                                color: window.palette.textPrimary
-                                font.pixelSize: publicFileButton.font.pixelSize
+                            contentItem: Image {
+                                anchors.centerIn: parent
+                                width: window.scaleFont(22)
+                                height: width
+                                source: publicFileButton.iconSource
+                                fillMode: Image.PreserveAspectFit
+                                smooth: true
                             }
                         }
 
@@ -1506,7 +1543,7 @@ ApplicationWindow {
                                 anchors.centerIn: parent
                                 text: "Send"
                                 color: palette.panel
-                                font.pixelSize: 15
+                                font.pixelSize: window.scaleFont(15)
                                 font.bold: true
                                 horizontalAlignment: Text.AlignHCenter
                                 verticalAlignment: Text.AlignVCenter
@@ -1549,8 +1586,9 @@ ApplicationWindow {
 
                             Text {
                                 text: "📎"
-                                font.pixelSize: 20
+                                font.pixelSize: window.scaleFont(20)
                                 color: window.palette.accent
+                                font.family: window.emojiFontFamily
                             }
 
                             ColumnLayout {
@@ -1560,7 +1598,7 @@ ApplicationWindow {
                                 Text {
                                     text: window.publicPendingFile ? window.publicPendingFile.name : ""
                                     color: window.palette.textPrimary
-                                    font.pixelSize: 13
+                                    font.pixelSize: window.scaleFont(13)
                                     elide: Text.ElideRight
                                     Layout.fillWidth: true
                                 }
@@ -1568,7 +1606,7 @@ ApplicationWindow {
                                 Text {
                                     text: window.publicPendingFile ? window.formatFileSize(window.publicPendingFile.size) : ""
                                     color: window.palette.textSecondary
-                                    font.pixelSize: 11
+                                    font.pixelSize: window.scaleFont(11)
                                     Layout.fillWidth: true
                                 }
                             }
@@ -1592,7 +1630,7 @@ ApplicationWindow {
                                     anchors.centerIn: parent
                                     text: parent.text
                                     color: window.palette.textSecondary
-                                    font.pixelSize: 12
+                                    font.pixelSize: window.scaleFont(12)
                                 }
                             }
                         }
@@ -1646,10 +1684,30 @@ ApplicationWindow {
 
             Menu {
                 id: privateEmojiMenu
+                padding: 8
+                background: Rectangle {
+                    radius: 14
+                    color: window.palette.canvas
+                    border.color: window.palette.outline
+                    border.width: 1
+                }
                 Repeater {
                     model: window.emojiOptions
                     delegate: MenuItem {
-                        text: modelData
+                        width: 44
+                        height: 44
+                        padding: 0
+                        background: Rectangle {
+                            radius: 12
+                            color: hovered ? window.palette.surface : "transparent"
+                        }
+                        contentItem: Text {
+                            anchors.centerIn: parent
+                            text: modelData
+                            font.pixelSize: window.scaleFont(22)
+                            font.family: window.emojiFontFamily
+                            color: window.palette.textPrimary
+                        }
                         onTriggered: {
                             window.insertEmojiIntoField(messageField, modelData)
                             messageField.forceActiveFocus()
@@ -1694,7 +1752,7 @@ ApplicationWindow {
                 Text {
                     text: displayName.length > 0 ? "Private line with " + displayName : "Private line"
                     color: palette.textPrimary
-                    font.pixelSize: 18
+                    font.pixelSize: window.scaleFont(18)
                     font.bold: true
                 }
 
@@ -1709,7 +1767,7 @@ ApplicationWindow {
                 Text {
                     text: "Only you and " + (displayName.length > 0 ? displayName : "this guest") + " can see this thread"
                     color: palette.textSecondary
-                    font.pixelSize: 12
+                    font.pixelSize: window.scaleFont(12)
                     Layout.alignment: Qt.AlignVCenter
                     wrapMode: Text.WordWrap
                 }
@@ -1719,7 +1777,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 text: peerKey.length > 0 && window.privateTypingStates[peerKey] ? peerKey + " is typing..." : ""
                 color: palette.textSecondary
-                font.pixelSize: 12
+                font.pixelSize: window.scaleFont(12)
                 visible: text.length > 0
             }
 
@@ -1898,10 +1956,11 @@ ApplicationWindow {
                                 placeholderText: displayName.length > 0 ? "Whisper to " + displayName : "Whisper to this guest"
                                 placeholderTextColor: window.palette.textSecondary
                                 color: window.palette.textPrimary
+                                font.family: window.uiFontFamily + ", " + window.emojiFontFamily
                                 selectionColor: window.palette.accent
                                 selectedTextColor: window.palette.textPrimary
                                 verticalAlignment: Text.AlignVCenter
-                                font.pixelSize: 14
+                                font.pixelSize: window.scaleFont(14)
                                 wrapMode: Text.WordWrap
                                 cursorDelegate: Rectangle {
                                     width: 2
@@ -1948,8 +2007,7 @@ ApplicationWindow {
                             property color hoverColor: window.palette.surface
                             property color activeColor: window.palette.accentSoft
                             property color borderColor: window.palette.outline
-                            text: "😊"
-                            font.pixelSize: 20
+                            readonly property url iconSource: Qt.resolvedUrl("../../assets/emoji_icon.svg")
                             onClicked: {
                                 var pos = mapToItem(null, 0, height)
                                 privateEmojiMenu.x = pos.x
@@ -1968,13 +2026,13 @@ ApplicationWindow {
                                     ColorAnimation { duration: 140; easing.type: Easing.OutQuad }
                                 }
                             }
-                            contentItem: Text {
-                                anchors.fill: parent
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                                text: privateEmojiButton.text
-                                color: window.palette.textPrimary
-                                font.pixelSize: privateEmojiButton.font.pixelSize
+                            contentItem: Image {
+                                anchors.centerIn: parent
+                                width: window.scaleFont(24)
+                                height: width
+                                source: privateEmojiButton.iconSource
+                                fillMode: Image.PreserveAspectFit
+                                smooth: true
                             }
                         }
 
@@ -1988,8 +2046,7 @@ ApplicationWindow {
                             property color hoverColor: window.palette.surface
                             property color activeColor: window.palette.accentSoft
                             property color borderColor: window.palette.outline
-                            text: "📎"
-                            font.pixelSize: 18
+                            readonly property url iconSource: Qt.resolvedUrl("../../assets/file_icon.svg")
                             enabled: peerKey.length > 0
                             onClicked: privateFileDialog.open()
                             background: Rectangle {
@@ -2004,13 +2061,13 @@ ApplicationWindow {
                                     ColorAnimation { duration: 140; easing.type: Easing.OutQuad }
                                 }
                             }
-                            contentItem: Text {
-                                anchors.fill: parent
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                                text: privateFileButton.text
-                                color: window.palette.textPrimary
-                                font.pixelSize: privateFileButton.font.pixelSize
+                            contentItem: Image {
+                                anchors.centerIn: parent
+                                width: window.scaleFont(22)
+                                height: width
+                                source: privateFileButton.iconSource
+                                fillMode: Image.PreserveAspectFit
+                                smooth: true
                             }
                         }
 
@@ -2058,7 +2115,7 @@ ApplicationWindow {
                                 anchors.centerIn: parent
                                 text: "Send"
                                 color: palette.panel
-                                font.pixelSize: 15
+                                font.pixelSize: window.scaleFont(15)
                                 font.bold: true
                                 horizontalAlignment: Text.AlignHCenter
                                 verticalAlignment: Text.AlignVCenter
@@ -2105,8 +2162,9 @@ ApplicationWindow {
 
                             Text {
                                 text: "📎"
-                                font.pixelSize: 20
+                                font.pixelSize: window.scaleFont(20)
                                 color: window.palette.accent
+                                font.family: window.emojiFontFamily
                             }
 
                             ColumnLayout {
@@ -2116,7 +2174,7 @@ ApplicationWindow {
                                 Text {
                                     text: pendingFile ? pendingFile.name : ""
                                     color: window.palette.textPrimary
-                                    font.pixelSize: 13
+                                    font.pixelSize: window.scaleFont(13)
                                     elide: Text.ElideRight
                                     Layout.fillWidth: true
                                 }
@@ -2124,7 +2182,7 @@ ApplicationWindow {
                                 Text {
                                     text: pendingFile ? window.formatFileSize(pendingFile.size) : ""
                                     color: window.palette.textSecondary
-                                    font.pixelSize: 11
+                                    font.pixelSize: window.scaleFont(11)
                                     Layout.fillWidth: true
                                 }
                             }
@@ -2149,7 +2207,7 @@ ApplicationWindow {
                                     anchors.centerIn: parent
                                     text: parent.text
                                     color: window.palette.textSecondary
-                                    font.pixelSize: 12
+                                    font.pixelSize: window.scaleFont(12)
                                 }
                             }
                         }
@@ -2203,7 +2261,7 @@ ApplicationWindow {
             Text {
                 text: model.displayContext !== undefined ? model.displayContext : (model.isPrivate ? model.user + " • private channel" : model.user)
                 color: model.isPrivate ? palette.accent : palette.textSecondary
-                font.pixelSize: 12
+                font.pixelSize: window.scaleFont(12)
                 font.bold: true
                 Layout.alignment: Qt.AlignLeft
                 topPadding: isFirst ? 2 : 0
@@ -2269,7 +2327,7 @@ ApplicationWindow {
                         color: palette.textPrimary
                         wrapMode: Text.Wrap
                         width: parent.width
-                        font.pixelSize: 15
+                        font.pixelSize: window.scaleFont(15)
                         lineHeight: 1.35
                     }
 
@@ -2290,8 +2348,9 @@ ApplicationWindow {
 
                             Text {
                                 text: "📎"
-                                font.pixelSize: 20
+                                font.pixelSize: window.scaleFont(20)
                                 color: palette.accent
+                                font.family: window.emojiFontFamily
                             }
 
                             ColumnLayout {
@@ -2301,7 +2360,7 @@ ApplicationWindow {
                                 Text {
                                     text: model.fileName
                                     color: palette.textPrimary
-                                    font.pixelSize: 13
+                                    font.pixelSize: window.scaleFont(13)
                                     elide: Text.ElideRight
                                     Layout.fillWidth: true
                                 }
@@ -2309,7 +2368,7 @@ ApplicationWindow {
                                 Text {
                                     text: window.formatFileSize(model.fileSize)
                                     color: palette.textSecondary
-                                    font.pixelSize: 11
+                                    font.pixelSize: window.scaleFont(11)
                                     Layout.fillWidth: true
                                 }
                             }
@@ -2353,7 +2412,7 @@ ApplicationWindow {
                         // Left-aligned timestamp
                         Text {
                             color: palette.textSecondary
-                            font.pixelSize: 11
+                            font.pixelSize: window.scaleFont(11)
                             text: model.timestamp ? model.timestamp : ""
                             Layout.alignment: Qt.AlignLeft
                         }
@@ -2362,7 +2421,7 @@ ApplicationWindow {
                         Text {
                             Layout.fillWidth: true
                             color: palette.textSecondary
-                            font.pixelSize: 11
+                            font.pixelSize: window.scaleFont(11)
                             horizontalAlignment: Text.AlignRight
                             text: {
                                 if (!model.isPrivate || model.isOutgoing !== true) {
@@ -2511,14 +2570,14 @@ ApplicationWindow {
                     Text {
                         text: name
                         color: palette.textPrimary
-                        font.pixelSize: 14
+                        font.pixelSize: window.scaleFont(14)
                         font.bold: true
                     }
 
                     Text {
                         text: "Invite to private line"
                         color: palette.textSecondary
-                        font.pixelSize: 11
+                        font.pixelSize: window.scaleFont(11)
                     }
                 }
             }
