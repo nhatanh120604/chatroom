@@ -1959,8 +1959,7 @@ ApplicationWindow {
                             property color hoverColor: window.palette.surface
                             property color activeColor: window.palette.accentSoft
                             property color borderColor: window.palette.outline
-                            text: "😊"
-                            font.pixelSize: window.scaleFont(20)
+                            readonly property url iconSource: Qt.resolvedUrl("../../assets/emoji_icon.svg")
                             onClicked: {
                                 var pos = mapToItem(null, 0, height)
                                 privateEmojiMenu.x = pos.x
@@ -1979,14 +1978,13 @@ ApplicationWindow {
                                     ColorAnimation { duration: 140; easing.type: Easing.OutQuad }
                                 }
                             }
-                            contentItem: Text {
-                                anchors.fill: parent
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                                text: privateEmojiButton.text
-                                color: window.palette.textPrimary
-                                font.pixelSize: privateEmojiButton.font.pixelSize
-                                font.family: window.emojiFontFamily
+                            contentItem: Image {
+                                anchors.centerIn: parent
+                                width: window.scaleFont(24)
+                                height: width
+                                source: privateEmojiButton.iconSource
+                                fillMode: Image.PreserveAspectFit
+                                smooth: true
                             }
                         }
 
@@ -2000,8 +1998,7 @@ ApplicationWindow {
                             property color hoverColor: window.palette.surface
                             property color activeColor: window.palette.accentSoft
                             property color borderColor: window.palette.outline
-                            text: "📎"
-                            font.pixelSize: window.scaleFont(18)
+                            readonly property url iconSource: Qt.resolvedUrl("../../assets/file_icon.svg")
                             enabled: peerKey.length > 0
                             onClicked: privateFileDialog.open()
                             background: Rectangle {
@@ -2016,14 +2013,13 @@ ApplicationWindow {
                                     ColorAnimation { duration: 140; easing.type: Easing.OutQuad }
                                 }
                             }
-                            contentItem: Text {
-                                anchors.fill: parent
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                                text: privateFileButton.text
-                                color: window.palette.textPrimary
-                                font.pixelSize: privateFileButton.font.pixelSize
-                                font.family: window.emojiFontFamily
+                            contentItem: Image {
+                                anchors.centerIn: parent
+                                width: window.scaleFont(22)
+                                height: width
+                                source: privateFileButton.iconSource
+                                fillMode: Image.PreserveAspectFit
+                                smooth: true
                             }
                         }
 
