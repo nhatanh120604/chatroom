@@ -37,17 +37,11 @@ ApplicationWindow {
     function scaleFont(size) {
         return Math.round(size * fontScale)
     }
-     readonly property string emojiFontFamily: Qt.platform.os === "windows"
-                                                            ? "Segoe UI Emoji"
-                                                            : (Qt.platform.os === "osx"
-                                                                ? "Apple Color Emoji"
-                                                                : "Noto Color Emoji, Noto Emoji, Symbola, DejaVu Sans")
-
-     readonly property string uiFontFamily: Qt.platform.os === "windows"
-                                                         ? "Segoe UI"
-                                                         : (Qt.platform.os === "osx"
-                                                             ? "SF Pro Text"
-                                                             : "Cantarell")
+    readonly property string emojiFontFamily: Qt.platform.os === "windows"
+                                             ? "Segoe UI Emoji"
+                                             : (Qt.platform.os === "osx"
+                                                ? "Apple Color Emoji"
+                                                : "Noto Color Emoji, Noto Emoji, Symbola, DejaVu Sans")
 
     function avatarGradientFor(name) {
         return avatarDefaultColors
@@ -1121,30 +1115,10 @@ ApplicationWindow {
 
             Menu {
                 id: publicEmojiMenu
-                padding: 8
-                background: Rectangle {
-                    radius: 14
-                    color: window.palette.canvas
-                    border.color: window.palette.outline
-                    border.width: 1
-                }
                 Repeater {
                     model: window.emojiOptions
                     delegate: MenuItem {
-                        width: 44
-                        height: 44
-                        padding: 0
-                        background: Rectangle {
-                            radius: 12
-                            color: hovered ? window.palette.surface : "transparent"
-                        }
-                        contentItem: Text {
-                            anchors.centerIn: parent
-                            text: modelData
-                            font.pixelSize: window.scaleFont(22)
-                            font.family: window.emojiFontFamily
-                            color: window.palette.textPrimary
-                        }
+                        text: modelData
                         onTriggered: {
                             window.insertEmojiIntoField(messageField, modelData)
                             messageField.forceActiveFocus()
@@ -1388,7 +1362,6 @@ ApplicationWindow {
                                 placeholderText: "Share something with the lounge"
                                 placeholderTextColor: window.palette.textSecondary
                                 color: window.palette.textPrimary
-                                font.family: window.uiFontFamily + ", " + window.emojiFontFamily
                                 selectionColor: window.palette.accent
                                 selectedTextColor: window.palette.textPrimary
                                 verticalAlignment: Text.AlignVCenter
@@ -1684,30 +1657,10 @@ ApplicationWindow {
 
             Menu {
                 id: privateEmojiMenu
-                padding: 8
-                background: Rectangle {
-                    radius: 14
-                    color: window.palette.canvas
-                    border.color: window.palette.outline
-                    border.width: 1
-                }
                 Repeater {
                     model: window.emojiOptions
                     delegate: MenuItem {
-                        width: 44
-                        height: 44
-                        padding: 0
-                        background: Rectangle {
-                            radius: 12
-                            color: hovered ? window.palette.surface : "transparent"
-                        }
-                        contentItem: Text {
-                            anchors.centerIn: parent
-                            text: modelData
-                            font.pixelSize: window.scaleFont(22)
-                            font.family: window.emojiFontFamily
-                            color: window.palette.textPrimary
-                        }
+                        text: modelData
                         onTriggered: {
                             window.insertEmojiIntoField(messageField, modelData)
                             messageField.forceActiveFocus()
@@ -1956,7 +1909,6 @@ ApplicationWindow {
                                 placeholderText: displayName.length > 0 ? "Whisper to " + displayName : "Whisper to this guest"
                                 placeholderTextColor: window.palette.textSecondary
                                 color: window.palette.textPrimary
-                                font.family: window.uiFontFamily + ", " + window.emojiFontFamily
                                 selectionColor: window.palette.accent
                                 selectedTextColor: window.palette.textPrimary
                                 verticalAlignment: Text.AlignVCenter
@@ -2007,7 +1959,8 @@ ApplicationWindow {
                             property color hoverColor: window.palette.surface
                             property color activeColor: window.palette.accentSoft
                             property color borderColor: window.palette.outline
-                            readonly property url iconSource: Qt.resolvedUrl("../../assets/emoji_icon.svg")
+                            text: "😊"
+                            font.pixelSize: window.scaleFont(20)
                             onClicked: {
                                 var pos = mapToItem(null, 0, height)
                                 privateEmojiMenu.x = pos.x
@@ -2026,13 +1979,14 @@ ApplicationWindow {
                                     ColorAnimation { duration: 140; easing.type: Easing.OutQuad }
                                 }
                             }
-                            contentItem: Image {
-                                anchors.centerIn: parent
-                                width: window.scaleFont(24)
-                                height: width
-                                source: privateEmojiButton.iconSource
-                                fillMode: Image.PreserveAspectFit
-                                smooth: true
+                            contentItem: Text {
+                                anchors.fill: parent
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                                text: privateEmojiButton.text
+                                color: window.palette.textPrimary
+                                font.pixelSize: privateEmojiButton.font.pixelSize
+                                font.family: window.emojiFontFamily
                             }
                         }
 
@@ -2046,7 +2000,8 @@ ApplicationWindow {
                             property color hoverColor: window.palette.surface
                             property color activeColor: window.palette.accentSoft
                             property color borderColor: window.palette.outline
-                            readonly property url iconSource: Qt.resolvedUrl("../../assets/file_icon.svg")
+                            text: "📎"
+                            font.pixelSize: window.scaleFont(18)
                             enabled: peerKey.length > 0
                             onClicked: privateFileDialog.open()
                             background: Rectangle {
@@ -2061,13 +2016,14 @@ ApplicationWindow {
                                     ColorAnimation { duration: 140; easing.type: Easing.OutQuad }
                                 }
                             }
-                            contentItem: Image {
-                                anchors.centerIn: parent
-                                width: window.scaleFont(22)
-                                height: width
-                                source: privateFileButton.iconSource
-                                fillMode: Image.PreserveAspectFit
-                                smooth: true
+                            contentItem: Text {
+                                anchors.fill: parent
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                                text: privateFileButton.text
+                                color: window.palette.textPrimary
+                                font.pixelSize: privateFileButton.font.pixelSize
+                                font.family: window.emojiFontFamily
                             }
                         }
 
