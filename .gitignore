@@ -1,1 +1,16 @@
 \venv
+# env files
+\.venv
+.env
+.env.*
+# pycache
+__pycache__/
+
+# vscode
+.vscode/
+.vscode/*
+
+*.pem
+server/uploads/
+
+.pytest_cache/
