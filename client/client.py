@@ -28,6 +28,7 @@ except ImportError:
 
 
 MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB safety cap
+MAX_AVATAR_BYTES = 128 * 1024  # 128 KB cap per avatar
 
 
 class ChatClient(QObject):
@@ -60,6 +61,8 @@ class ChatClient(QObject):
     )  # transfer_id, current_chunk, total_chunks
     fileTransferComplete = Signal(str, str)  # transfer_id, filename
     fileTransferError = Signal(str, str)  # transfer_id, error_message
+    avatarsUpdated = Signal("QVariant")  # username -> avatar payload
+    avatarUpdated = Signal(str, "QVariant")  # username, avatar payload
 
     def __init__(self, url="http://localhost:5000"):
         super().__init__()
@@ -70,6 +73,7 @@ class ChatClient(QObject):
         self._connected = False
         self._connecting = False
         self._users = []
+        self._avatars = {}
         self._connect_lock = threading.Lock()
         self._pending_lock = threading.Lock()
         self._pending_events = []
@@ -143,10 +147,12 @@ class ChatClient(QObject):
             self._connected = False
             self._connecting = False
             self._users = []
+            self._avatars = {}
             self._pending_events.clear()
             self._public_typing_flag = False
             self._private_typing_flags.clear()
             self.usersUpdated.emit([])
+            self.avatarsUpdated.emit({})
             self._set_username("")
             self.disconnected.emit()  # Notify the UI
             self._history_synced = False
@@ -228,6 +234,17 @@ class ChatClient(QObject):
         def on_update_user_list(data):
             users = data.get("users", [])
             self._users = users
+            avatars = data.get("avatars", {})
+            if isinstance(avatars, dict):
+                snapshot: Dict[str, Dict[str, Any]] = {}
+                for name, info in avatars.items():
+                    if isinstance(info, dict) and info.get("data"):
+                        snapshot[name] = info
+                self._avatars = snapshot
+                self.avatarsUpdated.emit(snapshot.copy())
+            else:
+                self._avatars = {}
+                self.avatarsUpdated.emit({})
             if self._desired_username and self._desired_username in users:
                 self._set_username(self._desired_username)
             elif self._username and self._username not in users:
@@ -236,6 +253,20 @@ class ChatClient(QObject):
             # No per-user key exchange under server-managed encryption
 
             self.usersUpdated.emit(self._users.copy())
+
+        @self._sio.on("avatar_update")
+        def on_avatar_update(data):
+            username = data.get("username")
+            avatar = data.get("avatar")
+            if not isinstance(username, str) or not username:
+                return
+            payload = avatar if isinstance(avatar, dict) else {}
+            if payload.get("data"):
+                self._avatars[username] = payload
+            else:
+                self._avatars.pop(username, None)
+            self.avatarUpdated.emit(username, payload)
+            self.avatarsUpdated.emit(self._avatars.copy())
 
         @self._sio.on("chat_history")
         def on_chat_history(data):
@@ -1067,6 +1098,39 @@ class ChatClient(QObject):
         except OSError as exc:
             self._notify_error(f"Failed to save file: {exc}")
             return ""
+
+    @Slot(str)
+    def setAvatar(self, file_url: str):
+        path = self._normalize_file_path(file_url)
+        if not path:
+            self._notify_error("Invalid avatar selection.")
+            return
+        try:
+            resolved = path.resolve(strict=True)
+        except (OSError, RuntimeError):
+            self._notify_error("Avatar file could not be accessed.")
+            return
+        if not resolved.is_file():
+            self._notify_error("Avatar must be a regular image file.")
+            return
+        try:
+            raw = resolved.read_bytes()
+        except OSError:
+            self._notify_error("Failed to read avatar file.")
+            return
+        if not raw or len(raw) > MAX_AVATAR_BYTES:
+            self._notify_error("Avatar must be under 128 KB.")
+            return
+        mime, _ = mimetypes.guess_type(str(resolved))
+        mime = mime or "image/png"
+        if not mime.startswith("image/"):
+            self._notify_error("Avatar must be an image.")
+            return
+        payload = {
+            "mime": mime,
+            "data": base64.b64encode(raw).decode("ascii"),
+        }
+        self._emit_post_key("set_avatar", payload)
 
     def _get_username(self):
         return self._username

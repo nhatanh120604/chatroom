@@ -6,6 +6,7 @@ import os
 import threading
 #from dotenv import load_dotenv
 import base64
+import binascii
 from datetime import datetime, timezone
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
@@ -16,6 +17,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 MAX_PUBLIC_HISTORY = 200
 MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB safety cap
+MAX_AVATAR_BYTES = 128 * 1024  # 128 KB cap per avatar
 
 
 def _sanitize_file_payload(data):
@@ -51,6 +53,40 @@ def _sanitize_file_payload(data):
     }
 
 
+def _sanitize_avatar_payload(data):
+    """Validate avatar uploads and clamp size/mime types."""
+    if not isinstance(data, dict):
+        return None
+
+    mime = str(data.get("mime", "")).strip().lower()
+    if not mime.startswith("image/"):
+        logging.warning("Rejected avatar with invalid mime: %s", mime)
+        return None
+
+    encoded = data.get("data")
+    if not isinstance(encoded, str) or not encoded:
+        return None
+
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        logging.warning("Rejected avatar with invalid base64 payload")
+        return None
+
+    if not raw or len(raw) > MAX_AVATAR_BYTES:
+        logging.warning("Rejected avatar exceeding size cap")
+        return None
+
+    safe_mime = mime[:64] if mime else "image/png"
+    sanitized = base64.b64encode(raw).decode("ascii")
+
+    return {
+        "mime": safe_mime,
+        "data": sanitized,
+        "updated": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 # Load environment variables from .env file
 #load_dotenv()
 
@@ -75,6 +111,7 @@ class ChatServer:
         self.private_message_counter = 0
         self.private_messages = {}
         self.session_keys = {}  # sid -> AES key (bytes)
+        self.avatars = {}
         # Uploads directory for caching plaintext files
         self.upload_dir = os.path.join(os.path.dirname(__file__), "uploads")
         try:
@@ -126,15 +163,26 @@ class ChatServer:
         @self.sio.event
         def disconnect(sid):
             logging.info(f"Client disconnected: {sid}")
+            users_snapshot = []
+            avatars_snapshot = {}
             with self.lock:
                 username = self.clients.pop(sid, None)
                 self.session_keys.pop(sid, None)
                 if username:
-                    # Notify remaining clients by sending the updated user list
-                    self.sio.emit(
-                        "update_user_list", {"users": list(self.clients.values())}
-                    )
-                    logging.info(f"User left: {username}")
+                    self.avatars.pop(username, None)
+                    users_snapshot = list(self.clients.values())
+                    avatars_snapshot = {
+                        user: self.avatars[user]
+                        for user in users_snapshot
+                        if user in self.avatars
+                    }
+            if username:
+                # Notify remaining clients by sending the updated user list
+                self.sio.emit(
+                    "update_user_list",
+                    {"users": users_snapshot, "avatars": avatars_snapshot},
+                )
+                logging.info(f"User left: {username}")
 
         @self.sio.event
         def register(sid, data):
@@ -167,10 +215,18 @@ class ChatServer:
 
                 self.clients[sid] = username
                 users_snapshot = list(self.clients.values())
+                avatars_snapshot = {
+                    user: self.avatars[user]
+                    for user in users_snapshot
+                    if user in self.avatars
+                }
                 history_snapshot = list(self.public_history)
 
             # Notify all clients (including the new one) with the updated user list
-            self.sio.emit("update_user_list", {"users": users_snapshot})
+            self.sio.emit(
+                "update_user_list",
+                {"users": users_snapshot, "avatars": avatars_snapshot},
+            )
             logging.info(f"User registered: {username} with SID: {sid}")
 
             if history_snapshot:
@@ -445,6 +501,35 @@ class ChatServer:
                     context,
                     username,
                 )
+
+        @self.sio.event
+        def set_avatar(sid, data):
+            with self.lock:
+                username = self.clients.get(sid)
+
+            if not username:
+                self.sio.emit(
+                    "error", {"message": "Register before setting an avatar."}, to=sid
+                )
+                return
+
+            if data is None:
+                removed = False
+                with self.lock:
+                    removed = self.avatars.pop(username, None) is not None
+                if removed:
+                    self.sio.emit("avatar_update", {"username": username, "avatar": None})
+                return
+
+            payload = _sanitize_avatar_payload(data)
+            if not payload:
+                self.sio.emit("error", {"message": "Invalid avatar payload."}, to=sid)
+                return
+
+            with self.lock:
+                self.avatars[username] = payload
+
+            self.sio.emit("avatar_update", {"username": username, "avatar": payload})
 
         @self.sio.event
         def private_message_read(sid, data):

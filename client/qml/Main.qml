@@ -47,6 +47,15 @@ ApplicationWindow {
         return avatarDefaultColors
     }
 
+    function avatarSourceFor(name) {
+        if (!name || !userAvatars || !userAvatars[name] || !userAvatars[name].data) {
+            return ""
+        }
+        var info = userAvatars[name]
+        var mime = info.mime && info.mime.length > 0 ? info.mime : "image/png"
+        return "data:" + mime + ";base64," + info.data
+    }
+
     property var privateMessageModels: ({})
     property var privateSeenTransfers: ({}) // peer -> set/dict of transfer_ids
     property var privateDrafts: ({})
@@ -60,6 +69,7 @@ ApplicationWindow {
     property var emojiOptions: ["😀", "😂", "😍", "😎", "👍", "🙏", "🎉", "❤️", "🔥", "🤔", "🥳", "🤩", "😢", "😡"]
     property var publicPendingFile: null
     property var privatePendingFiles: ({})
+    property var userAvatars: ({})
 
     function formatTimestamp(ts) {
         try {
@@ -763,6 +773,60 @@ ApplicationWindow {
                                     }
                                 }
 
+                                Button {
+                                    id: avatarButton
+                                    Layout.preferredWidth: 150
+                                    Layout.preferredHeight: 44
+                                    visible: chatClient.username.length > 0
+                                    enabled: chatClient.username.length > 0
+                                    padding: 0
+                                    topPadding: 0
+                                    bottomPadding: 0
+                                    leftPadding: 0
+                                    rightPadding: 0
+                                    transformOrigin: Item.Center
+                                    scale: down ? 0.96 : (hovered ? 1.02 : 1.0)
+                                    Behavior on scale {
+                                        NumberAnimation {
+                                            duration: 140
+                                            easing.type: Easing.OutQuad
+                                        }
+                                    }
+                                    background: Rectangle {
+                                        radius: 20
+                                        border.width: 0
+                                        gradient: Gradient {
+                                            GradientStop { position: 0.0; color: palette.accent }
+                                            GradientStop { position: 1.0; color: palette.accentBold }
+                                        }
+                                        Rectangle {
+                                            anchors.fill: parent
+                                            radius: parent.radius
+                                            gradient: Gradient {
+                                                GradientStop { position: 0.0; color: "#40FFFFFF" }
+                                                GradientStop { position: 1.0; color: "#00FFFFFF" }
+                                            }
+                                            opacity: avatarButton.down ? 0.45 : (avatarButton.hovered ? 0.2 : 0.0)
+                                            Behavior on opacity {
+                                                NumberAnimation {
+                                                    duration: 140
+                                                    easing.type: Easing.OutQuad
+                                                }
+                                            }
+                                        }
+                                    }
+                                    contentItem: Text {
+                                        anchors.centerIn: parent
+                                        text: "Update avatar"
+                                        color: palette.panel
+                                        font.pixelSize: window.scaleFont(13)
+                                        font.bold: true
+                                        horizontalAlignment: Text.AlignHCenter
+                                        verticalAlignment: Text.AlignVCenter
+                                    }
+                                    onClicked: avatarFileDialog.open()
+                                }
+
                                 ToolButton {
                                     Layout.preferredWidth: 44
                                     Layout.preferredHeight: 44
@@ -1014,6 +1078,21 @@ ApplicationWindow {
                     }
                 }
             }
+        }
+    }
+
+    Platform.FileDialog {
+        id: avatarFileDialog
+        title: "Choose an avatar image"
+        nameFilters: ["Images (*.png *.jpg *.jpeg *.gif *.bmp *.webp)"]
+        onAccepted: {
+            var target = ""
+            if (avatarFileDialog.file && avatarFileDialog.file.toString)
+                target = avatarFileDialog.file.toString()
+            else if (avatarFileDialog.files && avatarFileDialog.files.length > 0)
+                target = avatarFileDialog.files[0].toString()
+            if (target && target.length > 0)
+                chatClient.setAvatar(target)
         }
     }
 
@@ -2210,188 +2289,230 @@ ApplicationWindow {
                 opacity: 0.18
             }
 
-            Text {
-                text: model.displayContext !== undefined ? model.displayContext : (model.isPrivate ? model.user + " • private channel" : model.user)
-                color: model.isPrivate ? palette.accent : palette.textSecondary
-                font.pixelSize: window.scaleFont(12)
-                font.bold: true
-                Layout.alignment: Qt.AlignLeft
-                topPadding: isFirst ? 2 : 0
-            }
-
-            Rectangle {
-                id: messageBubble
+            Row {
                 width: parent.width
-                radius: 18
-                color: messageContainer.isSystem ? palette.accentSoft : (model.isPrivate ? ((model.isOutgoing === true) ? palette.card : palette.accentSoft) : palette.card)
-                border.width: 1
-                property color baseBorder: messageContainer.isSystem ? palette.accent : (model.isPrivate ? ((model.isOutgoing === true) ? palette.canvas : palette.accent) : palette.canvas)
-                property bool hasText: model.text && model.text.length > 0
-                property bool hasFile: model.fileName && model.fileName.length > 0
-                implicitHeight: bubbleContent.implicitHeight + 40
-                border.color: baseBorder
-                Behavior on border.color {
-                    ColorAnimation {
-                        duration: 260
-                        easing.type: Easing.OutQuad
-                    }
-                }
+                spacing: 12
 
-                SequentialAnimation {
-                    id: systemGlow
-                    running: false
-                    ColorAnimation {
-                        target: messageBubble
-                        property: "border.color"
-                        to: palette.accentBold
-                        duration: 120
-                        easing.type: Easing.OutQuad
-                    }
-                    ColorAnimation {
-                        target: messageBubble
-                        property: "border.color"
-                        to: messageBubble.baseBorder
-                        duration: 420
-                        easing.type: Easing.OutCubic
-                    }
-                }
+                Item {
+                    width: 40
+                    height: 40
+                    property string avatarSource: window.avatarSourceFor(model.user)
 
-                Component.onCompleted: {
-                    if (messageContainer.isSystem) {
-                        systemGlow.restart()
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: width / 2
+                        visible: parent.avatarSource && parent.avatarSource.length > 0
+                        color: "transparent"
+                        clip: true
+
+                        Image {
+                            anchors.fill: parent
+                            source: parent.parent.avatarSource
+                            fillMode: Image.PreserveAspectCrop
+                            smooth: true
+                        }
+                    }
+
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: width / 2
+                        visible: !(parent.avatarSource && parent.avatarSource.length > 0)
+                        property var fallback: window.avatarGradientFor(model.user)
+                        gradient: Gradient {
+                            GradientStop { position: 0.0; color: fallback.top }
+                            GradientStop { position: 1.0; color: fallback.bottom }
+                        }
                     }
                 }
 
                 Column {
-                    id: bubbleContent
-                    width: parent.width - 40
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.leftMargin: 20
-                    anchors.rightMargin: 20
-                    anchors.top: parent.top
-                    anchors.topMargin: 20
-                    spacing: messageBubble.hasText && messageBubble.hasFile ? 12 : 6
+                    width: parent.width - 52
+                    spacing: 6
 
                     Text {
-                        visible: messageBubble.hasText
-                        text: model.text
-                        color: palette.textPrimary
-                        wrapMode: Text.Wrap
                         width: parent.width
-                        font.pixelSize: window.scaleFont(15)
-                        lineHeight: 1.35
+                        text: model.displayContext !== undefined ? model.displayContext : (model.isPrivate ? model.user + " • private channel" : model.user)
+                        color: model.isPrivate ? palette.accent : palette.textSecondary
+                        font.pixelSize: window.scaleFont(12)
+                        font.bold: true
+                        topPadding: isFirst ? 2 : 0
                     }
 
                     Rectangle {
+                        id: messageBubble
                         width: parent.width
-                        visible: messageBubble.hasFile
-                        radius: 10
-                        color: palette.surface
-                        border.color: palette.outline
+                        radius: 18
+                        color: messageContainer.isSystem ? palette.accentSoft : (model.isPrivate ? ((model.isOutgoing === true) ? palette.card : palette.accentSoft) : palette.card)
                         border.width: 1
-                        implicitHeight: attachmentRow.implicitHeight + 16
+                        property color baseBorder: messageContainer.isSystem ? palette.accent : (model.isPrivate ? ((model.isOutgoing === true) ? palette.canvas : palette.accent) : palette.canvas)
+                        property bool hasText: model.text && model.text.length > 0
+                        property bool hasFile: model.fileName && model.fileName.length > 0
+                        implicitHeight: bubbleContent.implicitHeight + 40
+                        border.color: baseBorder
+                        Behavior on border.color {
+                            ColorAnimation {
+                                duration: 260
+                                easing.type: Easing.OutQuad
+                            }
+                        }
 
-                        RowLayout {
-                            id: attachmentRow
-                            anchors.fill: parent
-                            anchors.margins: 12
-                            spacing: 12
+                        SequentialAnimation {
+                            id: systemGlow
+                            running: false
+                            ColorAnimation {
+                                target: messageBubble
+                                property: "border.color"
+                                to: palette.accentBold
+                                duration: 120
+                                easing.type: Easing.OutQuad
+                            }
+                            ColorAnimation {
+                                target: messageBubble
+                                property: "border.color"
+                                to: messageBubble.baseBorder
+                                duration: 420
+                                easing.type: Easing.OutCubic
+                            }
+                        }
+
+                        Component.onCompleted: {
+                            if (messageContainer.isSystem) {
+                                systemGlow.restart()
+                            }
+                        }
+
+                        Column {
+                            id: bubbleContent
+                            width: parent.width - 40
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.leftMargin: 20
+                            anchors.rightMargin: 20
+                            anchors.top: parent.top
+                            anchors.topMargin: 20
+                            spacing: messageBubble.hasText && messageBubble.hasFile ? 12 : 6
 
                             Text {
-                                text: "📎"
-                                font.pixelSize: window.scaleFont(20)
-                                color: palette.accent
-                                font.family: window.emojiFontFamily
+                                visible: messageBubble.hasText
+                                text: model.text
+                                color: palette.textPrimary
+                                wrapMode: Text.Wrap
+                                width: parent.width
+                                font.pixelSize: window.scaleFont(15)
+                                lineHeight: 1.35
                             }
 
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 2
+                            Rectangle {
+                                width: parent.width
+                                visible: messageBubble.hasFile
+                                radius: 10
+                                color: palette.surface
+                                border.color: palette.outline
+                                border.width: 1
+                                implicitHeight: attachmentRow.implicitHeight + 16
 
-                                Text {
-                                    text: model.fileName
-                                    color: palette.textPrimary
-                                    font.pixelSize: window.scaleFont(13)
-                                    elide: Text.ElideRight
-                                    Layout.fillWidth: true
+                                RowLayout {
+                                    id: attachmentRow
+                                    anchors.fill: parent
+                                    anchors.margins: 12
+                                    spacing: 12
+
+                                    Text {
+                                        text: "📎"
+                                        font.pixelSize: window.scaleFont(20)
+                                        color: palette.accent
+                                        font.family: window.emojiFontFamily
+                                    }
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 2
+
+                                        Text {
+                                            text: model.fileName
+                                            color: palette.textPrimary
+                                            font.pixelSize: window.scaleFont(13)
+                                            elide: Text.ElideRight
+                                            Layout.fillWidth: true
+                                        }
+
+                                        Text {
+                                            text: window.formatFileSize(model.fileSize)
+                                            color: palette.textSecondary
+                                            font.pixelSize: window.scaleFont(11)
+                                            Layout.fillWidth: true
+                                        }
+                                    }
+
+                                    // Save dialog for choosing download location
+                                    Platform.FileDialog {
+                                        id: saveAttachmentDialog
+                                        title: "Save attachment"
+                                        fileMode: Platform.FileDialog.SaveFile
+                                        nameFilters: ["All files (*)"]
+                                        property string payloadData: ""
+                                        onAccepted: {
+                                            var chosen = selectedFile || file || currentFile
+                                            if (!chosen || chosen.length === 0)
+                                                return
+                                            var result = chatClient.saveFileToPath(chosen, payloadData)
+                                            if (result && result.length > 0)
+                                                console.log("[QML] File saved to:", result)
+                                        }
+                                    }
+
+                                    Button {
+                                        text: "Download"
+                                        focusPolicy: Qt.NoFocus
+                                        onClicked: {
+                                            if (!model.fileData || model.fileData.length === 0)
+                                                return
+                                            saveAttachmentDialog.payloadData = model.fileData
+                                            // Suggest the original filename
+                                            try { saveAttachmentDialog.currentFile = model.fileName } catch(e) {}
+                                            saveAttachmentDialog.open()
+                                        }
+                                    }
                                 }
+                            }
 
+                            RowLayout {
+                                width: parent.width
+                                Layout.fillWidth: true
+
+                                // Left-aligned timestamp
                                 Text {
-                                    text: window.formatFileSize(model.fileSize)
                                     color: palette.textSecondary
                                     font.pixelSize: window.scaleFont(11)
+                                    text: model.timestamp ? model.timestamp : ""
+                                    Layout.alignment: Qt.AlignLeft
+                                }
+
+                                // Right-aligned private status
+                                Text {
                                     Layout.fillWidth: true
+                                    color: palette.textSecondary
+                                    font.pixelSize: window.scaleFont(11)
+                                    horizontalAlignment: Text.AlignRight
+                                    text: {
+                                        if (!model.isPrivate || model.isOutgoing !== true) {
+                                            return ""
+                                        }
+                                        var state = model.status ? model.status.toLowerCase() : ""
+                                        if (state === "seen") {
+                                            return "\u2713\u2713 Seen"
+                                        }
+                                        if (state === "delivered") {
+                                            return "\u2713 Delivered"
+                                        }
+                                        if (state === "sent") {
+                                            return "\u2713 Sent"
+                                        }
+                                        return ""
+                                    }
+                                    visible: text && text.length > 0
                                 }
                             }
-
-                            // Save dialog for choosing download location
-                            Platform.FileDialog {
-                                id: saveAttachmentDialog
-                                title: "Save attachment"
-                                fileMode: Platform.FileDialog.SaveFile
-                                nameFilters: ["All files (*)"]
-                                property string payloadData: ""
-                                onAccepted: {
-                                    var chosen = selectedFile || file || currentFile
-                                    if (!chosen || chosen.length === 0)
-                                        return
-                                    var result = chatClient.saveFileToPath(chosen, payloadData)
-                                    if (result && result.length > 0)
-                                        console.log("[QML] File saved to:", result)
-                                }
-                            }
-
-                            Button {
-                                text: "Download"
-                                focusPolicy: Qt.NoFocus
-                                onClicked: {
-                                    if (!model.fileData || model.fileData.length === 0)
-                                        return
-                                    saveAttachmentDialog.payloadData = model.fileData
-                                    // Suggest the original filename
-                                    try { saveAttachmentDialog.currentFile = model.fileName } catch(e) {}
-                                    saveAttachmentDialog.open()
-                                }
-                            }
-                        }
-                    }
-
-                    RowLayout {
-                        width: parent.width
-                        Layout.fillWidth: true
-
-                        // Left-aligned timestamp
-                        Text {
-                            color: palette.textSecondary
-                            font.pixelSize: window.scaleFont(11)
-                            text: model.timestamp ? model.timestamp : ""
-                            Layout.alignment: Qt.AlignLeft
-                        }
-
-                        // Right-aligned private status
-                        Text {
-                            Layout.fillWidth: true
-                            color: palette.textSecondary
-                            font.pixelSize: window.scaleFont(11)
-                            horizontalAlignment: Text.AlignRight
-                            text: {
-                                if (!model.isPrivate || model.isOutgoing !== true) {
-                                    return ""
-                                }
-                                var state = model.status ? model.status.toLowerCase() : ""
-                                if (state === "seen") {
-                                    return "\u2713\u2713 Seen"
-                                }
-                                if (state === "delivered") {
-                                    return "\u2713 Delivered"
-                                }
-                                if (state === "sent") {
-                                    return "\u2713 Sent"
-                                }
-                                return ""
-                            }
-                            visible: text && text.length > 0
                         }
                     }
                 }
@@ -2448,70 +2569,38 @@ ApplicationWindow {
                 anchors.margins: 14
                 spacing: 12
 
-                Rectangle {
+                Item {
                     id: avatarBadge
                     Layout.preferredWidth: 30
                     Layout.preferredHeight: 30
-                    radius: 15
+                    property string avatarSource: window.avatarSourceFor(name)
                     property var avatarColors: window.avatarGradientFor(name)
-                    gradient: Gradient {
-                        GradientStop { position: 0.0; color: avatarBadge.avatarColors.top }
-                        GradientStop { position: 1.0; color: avatarBadge.avatarColors.bottom }
-                    }
-                    border.color: "#60FFFFFF"
-                    border.width: 1
-                    scale: 1
-                    transformOrigin: Item.Center
-                    property real sheenOffset: -0.6
 
                     Rectangle {
                         anchors.fill: parent
-                        radius: parent.radius
+                        radius: width / 2
+                        visible: avatarBadge.avatarSource && avatarBadge.avatarSource.length > 0
                         color: "transparent"
-                        border.width: 0
+                        clip: true
+
+                        Image {
+                            anchors.fill: parent
+                            source: avatarBadge.avatarSource
+                            fillMode: Image.PreserveAspectCrop
+                            smooth: true
+                        }
+                    }
+
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: width / 2
+                        visible: !(avatarBadge.avatarSource && avatarBadge.avatarSource.length > 0)
                         gradient: Gradient {
-                            GradientStop {
-                                position: Math.max(0.0, Math.min(1.0, avatarBadge.sheenOffset - 0.2))
-                                color: "#00FFFFFF"
-                            }
-                            GradientStop {
-                                position: Math.max(0.0, Math.min(1.0, avatarBadge.sheenOffset))
-                                color: "#55FFFFFF"
-                            }
-                            GradientStop {
-                                position: Math.max(0.0, Math.min(1.0, avatarBadge.sheenOffset + 0.2))
-                                color: "#00FFFFFF"
-                            }
+                            GradientStop { position: 0.0; color: avatarBadge.avatarColors.top }
+                            GradientStop { position: 1.0; color: avatarBadge.avatarColors.bottom }
                         }
-                        opacity: 0.7
-                    }
-
-                    SequentialAnimation {
-                        id: avatarPulse
-                        loops: Animation.Infinite
-                        running: true
-                        NumberAnimation {
-                            target: avatarBadge
-                            property: "scale"
-                            to: 1.08
-                            duration: 1100
-                            easing.type: Easing.InOutSine
-                        }
-                        NumberAnimation {
-                            target: avatarBadge
-                            property: "scale"
-                            to: 1.0
-                            duration: 1100
-                            easing.type: Easing.InOutSine
-                        }
-                    }
-
-                    NumberAnimation on sheenOffset {
-                        loops: Animation.Infinite
-                        from: -0.6
-                        to: 1.6
-                        duration: 4200
-                        easing.type: Easing.InOutSine
+                        border.color: "#60FFFFFF"
+                        border.width: 1
                     }
                 }
 
@@ -2681,6 +2770,15 @@ ApplicationWindow {
                 }
             }
             window.privateTypingStates = refreshedPrivate
+            var trimmedAvatars = {}
+            var knownUsers = Object.keys(window.userAvatars)
+            for (var a = 0; a < users.length; ++a) {
+                var candidate = users[a]
+                if (knownUsers.indexOf(candidate) !== -1) {
+                    trimmedAvatars[candidate] = window.userAvatars[candidate]
+                }
+            }
+            window.userAvatars = trimmedAvatars
         }
 
         function onDisconnected() {
@@ -2688,6 +2786,7 @@ ApplicationWindow {
             usersModel.clear()
             window.totalUserCount = 0
             window.resetPrivateConversations()
+            window.userAvatars = ({})
             messagesModel.append({
                 "user": "System",
                 "text": "You have been disconnected.",
@@ -2727,6 +2826,23 @@ ApplicationWindow {
             if (name.length > 0) {
                 window.focusActiveComposer()
             }
+        }
+
+        function onAvatarsUpdated(map) {
+            window.userAvatars = map ? map : ({})
+        }
+
+        function onAvatarUpdated(username, info) {
+            if (!username || username.length === 0) {
+                return
+            }
+            var snapshot = Object.assign({}, window.userAvatars)
+            if (info && info.data) {
+                snapshot[username] = info
+            } else if (snapshot.hasOwnProperty(username)) {
+                delete snapshot[username]
+            }
+            window.userAvatars = snapshot
         }
     }
 }
