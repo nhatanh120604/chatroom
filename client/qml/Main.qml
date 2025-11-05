@@ -2038,7 +2038,7 @@ ApplicationWindow {
                             property color hoverColor: window.palette.surface
                             property color activeColor: window.palette.accentSoft
                             property color borderColor: window.palette.outline
-                            readonly property url iconSource: Qt.resolvedUrl("../../assets/emoji_icon.svg")
+                            readonly property url iconSource: Qt.resolvedUrl("../assets/emoji_icon.svg")
                             onClicked: {
                                 var pos = mapToItem(null, 0, height)
                                 privateEmojiMenu.x = pos.x
@@ -2077,7 +2077,7 @@ ApplicationWindow {
                             property color hoverColor: window.palette.surface
                             property color activeColor: window.palette.accentSoft
                             property color borderColor: window.palette.outline
-                            readonly property url iconSource: Qt.resolvedUrl("../../assets/file_icon.svg")
+                            readonly property url iconSource: Qt.resolvedUrl("../assets/file_icon.svg")
                             enabled: peerKey.length > 0
                             onClicked: privateFileDialog.open()
                             background: Rectangle {
@@ -2257,6 +2257,7 @@ ApplicationWindow {
             spacing: 6
             property bool isFirst: index === 0
             property bool isSystem: model.user === "System"
+            property bool isOwnMessage: model.user === chatClient.username
             opacity: 0
             scale: 0.97
             transformOrigin: Item.TopLeft
@@ -2292,6 +2293,7 @@ ApplicationWindow {
             Row {
                 width: parent.width
                 spacing: 12
+                layoutDirection: messageContainer.isOwnMessage ? Qt.RightToLeft : Qt.LeftToRight
 
                 Item {
                     width: 40
@@ -2330,25 +2332,30 @@ ApplicationWindow {
                     spacing: 6
 
                     Text {
-                        width: parent.width
+                        id: usernameText
                         text: model.displayContext !== undefined ? model.displayContext : (model.isPrivate ? model.user + " • private channel" : model.user)
-                        color: model.isPrivate ? palette.accent : palette.textSecondary
+                        color: model.isPrivate ? palette.accent : (messageContainer.isOwnMessage ? palette.accent : palette.textSecondary)
                         font.pixelSize: window.scaleFont(12)
                         font.bold: true
                         topPadding: isFirst ? 2 : 0
+                        horizontalAlignment: messageContainer.isOwnMessage ? Text.AlignRight : Text.AlignLeft
+                        anchors.right: messageContainer.isOwnMessage ? parent.right : undefined
+                        anchors.left: messageContainer.isOwnMessage ? undefined : parent.left
                     }
 
                     Rectangle {
                         id: messageBubble
-                        width: parent.width
+                        width: Math.max(180, Math.min(bubbleContent.implicitWidth + 40, parent.width))
                         radius: 18
-                        color: messageContainer.isSystem ? palette.accentSoft : (model.isPrivate ? ((model.isOutgoing === true) ? palette.card : palette.accentSoft) : palette.card)
+                        color: messageContainer.isSystem ? palette.accentSoft : (model.isPrivate ? ((model.isOutgoing === true) ? palette.card : palette.accentSoft) : (messageContainer.isOwnMessage ? palette.card : palette.accentSoft))
                         border.width: 1
-                        property color baseBorder: messageContainer.isSystem ? palette.accent : (model.isPrivate ? ((model.isOutgoing === true) ? palette.canvas : palette.accent) : palette.canvas)
+                        property color baseBorder: messageContainer.isSystem ? palette.accent : (model.isPrivate ? ((model.isOutgoing === true) ? palette.canvas : palette.accent) : (messageContainer.isOwnMessage ? palette.canvas : palette.accent))
                         property bool hasText: model.text && model.text.length > 0
                         property bool hasFile: model.fileName && model.fileName.length > 0
                         implicitHeight: bubbleContent.implicitHeight + 40
                         border.color: baseBorder
+                        anchors.right: messageContainer.isOwnMessage ? parent.right : undefined
+                        anchors.left: messageContainer.isOwnMessage ? undefined : parent.left
                         Behavior on border.color {
                             ColorAnimation {
                                 duration: 260
@@ -2383,7 +2390,6 @@ ApplicationWindow {
 
                         Column {
                             id: bubbleContent
-                            width: parent.width - 40
                             anchors.left: parent.left
                             anchors.right: parent.right
                             anchors.leftMargin: 20
@@ -2393,17 +2399,19 @@ ApplicationWindow {
                             spacing: messageBubble.hasText && messageBubble.hasFile ? 12 : 6
 
                             Text {
+                                id: messageText
                                 visible: messageBubble.hasText
                                 text: model.text
                                 color: palette.textPrimary
                                 wrapMode: Text.Wrap
-                                width: parent.width
+                                width: Math.min(implicitWidth, parent.parent.parent.width - 52 - 40)
                                 font.pixelSize: window.scaleFont(15)
                                 lineHeight: 1.35
                             }
 
                             Rectangle {
-                                width: parent.width
+                                id: fileAttachment
+                                width: messageText.visible ? messageText.width : 280
                                 visible: messageBubble.hasFile
                                 radius: 10
                                 color: palette.surface
