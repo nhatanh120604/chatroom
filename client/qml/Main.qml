@@ -2,6 +2,7 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import QtQuick.Effects 6.6
+import QtMultimedia
 import Qt.labs.platform 1.1 as Platform
 
 
@@ -70,6 +71,11 @@ ApplicationWindow {
     property var publicPendingFile: null
     property var privatePendingFiles: ({})
     property var userAvatars: ({})
+
+    // Sound notification settings
+    property bool soundsEnabled: true
+    property var lastSoundTime: new Date(0)
+    property int soundDebounceMs: 500  // Min 500ms between sounds
 
     function formatTimestamp(ts) {
         try {
@@ -166,6 +172,25 @@ ApplicationWindow {
         return (value / (1024 * 1024)).toFixed(1) + " MB"
     }
 
+    function copyToClipboard(text) {
+        if (!text || text.length === 0) {
+            return
+        }
+        chatClient.copyToClipboard(text)
+        console.log("Copied to clipboard:", text.substring(0, 50))
+    }
+
+    function playSoundIfAllowed(soundEffect) {
+        if (!soundsEnabled) {
+            return
+        }
+        var now = new Date()
+        if (now - lastSoundTime > soundDebounceMs) {
+            soundEffect.play()
+            lastSoundTime = now
+        }
+    }
+
     function setPrivateMessageStatusById(messageId, status) {
         if (!messageId || messageId <= 0) {
             return
@@ -230,6 +255,26 @@ ApplicationWindow {
         var idx = conversationIndex(key)
         if (idx >= 0) {
             conversationTabsModel.setProperty(idx, "hasUnread", unread)
+            if (!unread) {
+                conversationTabsModel.setProperty(idx, "unreadCount", 0)
+            }
+        }
+    }
+
+    function incrementConversationUnread(key) {
+        var idx = conversationIndex(key)
+        if (idx >= 0) {
+            var current = conversationTabsModel.get(idx).unreadCount || 0
+            conversationTabsModel.setProperty(idx, "unreadCount", current + 1)
+            conversationTabsModel.setProperty(idx, "hasUnread", true)
+        }
+    }
+
+    function clearConversationUnread(key) {
+        var idx = conversationIndex(key)
+        if (idx >= 0) {
+            conversationTabsModel.setProperty(idx, "hasUnread", false)
+            conversationTabsModel.setProperty(idx, "unreadCount", 0)
         }
     }
 
@@ -316,7 +361,7 @@ ApplicationWindow {
             privateSeenTransfers[peer][tid] = true
         }
         if (conversationIndex(peer) === -1) {
-            conversationTabsModel.append({"key": peer, "title": peer, "isPrivate": true, "hasUnread": false})
+            conversationTabsModel.append({"key": peer, "title": peer, "isPrivate": true, "hasUnread": false, "unreadCount": 0})
         }
         var resolvedStatus = status && status.length > 0 ? status : (isOutgoing === true ? "sent" : "delivered")
         var resolvedId = messageId && messageId > 0 ? messageId : 0
@@ -349,9 +394,13 @@ ApplicationWindow {
         var idx = conversationIndex(peer)
         var isActive = idx === conversationTabBar.currentIndex
         if (!isActive && isOutgoing !== true) {
-            setConversationUnread(peer, true)
+            incrementConversationUnread(peer)
         } else if (isActive && isOutgoing !== true) {
             markPrivateMessagesAsRead(peer)
+        }
+        // Play notification sound for incoming private messages
+        if (isOutgoing !== true) {
+            window.playSoundIfAllowed(privateMessageSound)
         }
         var page = conversationPages[peer]
         if (page && page.scrollToEnd) {
@@ -365,7 +414,7 @@ ApplicationWindow {
         }
         ensurePrivateModel(peer)
         if (conversationIndex(peer) === -1) {
-            conversationTabsModel.append({"key": peer, "title": peer, "isPrivate": true, "hasUnread": false})
+            conversationTabsModel.append({"key": peer, "title": peer, "isPrivate": true, "hasUnread": false, "unreadCount": 0})
         }
         var idx = conversationIndex(peer)
         if (idx >= 0) {
@@ -658,6 +707,142 @@ ApplicationWindow {
                                         font.pixelSize: window.scaleFont(12)
                                     }
                                 }
+
+                                // Connection Status Indicator
+                                Rectangle {
+                                    Layout.preferredWidth: 140
+                                    Layout.preferredHeight: 32
+                                    radius: 16
+                                    border.width: 1
+                                    border.color: {
+                                        if (chatClient.connectionState === "connected") return palette.success
+                                        if (chatClient.connectionState === "reconnecting") return palette.warning
+                                        return palette.outline
+                                    }
+                                    color: "transparent"
+
+                                    Row {
+                                        anchors.centerIn: parent
+                                        spacing: 8
+
+                                        Rectangle {
+                                            width: 8
+                                            height: 8
+                                            radius: 4
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            color: {
+                                                if (chatClient.connectionState === "connected") return palette.success
+                                                if (chatClient.connectionState === "reconnecting") return palette.warning
+                                                return palette.textSecondary
+                                            }
+
+                                            // Pulse animation for reconnecting
+                                            SequentialAnimation on opacity {
+                                                running: chatClient.connectionState === "reconnecting"
+                                                loops: Animation.Infinite
+                                                PropertyAnimation { to: 0.3; duration: 600 }
+                                                PropertyAnimation { to: 1.0; duration: 600 }
+                                            }
+                                        }
+
+                                        Text {
+                                            text: {
+                                                if (chatClient.connectionState === "connected") return "Connected"
+                                                if (chatClient.connectionState === "reconnecting") return "Reconnecting"
+                                                return "Offline"
+                                            }
+                                            color: palette.textPrimary
+                                            font.pixelSize: window.scaleFont(12)
+                                            font.bold: true
+                                        }
+                                    }
+
+                                    MouseArea {
+                                        id: statusTooltipArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                    }
+
+                                    // Tooltip
+                                    Rectangle {
+                                        visible: statusTooltipArea.containsMouse
+                                        color: palette.panel
+                                        border.color: palette.outline
+                                        border.width: 1
+                                        radius: 6
+                                        width: tooltipText.width + 16
+                                        height: tooltipText.height + 12
+                                        x: parent.width / 2 - width / 2
+                                        y: parent.height + 8
+                                        z: 1000
+
+                                        Text {
+                                            id: tooltipText
+                                            anchors.centerIn: parent
+                                            text: {
+                                                if (chatClient.connectionState === "connected")
+                                                    return "Connected to server"
+                                                if (chatClient.connectionState === "reconnecting")
+                                                    return "Attempting to reconnect..."
+                                                return "Not connected to server"
+                                            }
+                                            color: palette.textSecondary
+                                            font.pixelSize: window.scaleFont(11)
+                                        }
+                                    }
+                                }
+
+                                // Sound Toggle Button
+                                ToolButton {
+                                    Layout.preferredWidth: 44
+                                    Layout.preferredHeight: 44
+                                    text: soundsEnabled ? "🔔" : "🔕"
+                                    font.pixelSize: window.scaleFont(20)
+
+                                    background: Rectangle {
+                                        radius: 22
+                                        color: parent.hovered ? palette.canvas : "transparent"
+                                        border.color: parent.hovered ? palette.outline : "transparent"
+                                        border.width: 1
+
+                                        Behavior on color {
+                                            ColorAnimation { duration: 150 }
+                                        }
+                                    }
+
+                                    onClicked: {
+                                        soundsEnabled = !soundsEnabled
+                                    }
+
+                                    MouseArea {
+                                        id: soundToggleTooltipArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        onPressed: mouse.accepted = false
+                                    }
+
+                                    // Tooltip
+                                    Rectangle {
+                                        visible: soundToggleTooltipArea.containsMouse
+                                        color: palette.panel
+                                        border.color: palette.outline
+                                        border.width: 1
+                                        radius: 6
+                                        width: soundToggleTooltipText.width + 16
+                                        height: soundToggleTooltipText.height + 12
+                                        x: parent.width / 2 - width / 2
+                                        y: parent.height + 8
+                                        z: 1000
+
+                                        Text {
+                                            id: soundToggleTooltipText
+                                            anchors.centerIn: parent
+                                            text: soundsEnabled ? "Mute notifications" : "Unmute notifications"
+                                            color: palette.textSecondary
+                                            font.pixelSize: window.scaleFont(11)
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -904,6 +1089,15 @@ ApplicationWindow {
                                 color: "transparent"
                                 border.width: 0
                             }
+
+                            onCurrentIndexChanged: {
+                                // Clear unread count when tab is selected
+                                if (currentIndex >= 0 && currentIndex < conversationTabsModel.count) {
+                                    var tab = conversationTabsModel.get(currentIndex)
+                                    window.clearConversationUnread(tab.key)
+                                }
+                            }
+
                             Repeater {
                                 model: conversationTabsModel
                                 delegate: TabButton {
@@ -911,6 +1105,7 @@ ApplicationWindow {
                                     required property string title
                                     required property bool isPrivate
                                     required property bool hasUnread
+                                    required property int unreadCount
                                     implicitHeight: conversationTabBar.contentHeight
                                     padding: 0
                                     text: title
@@ -938,13 +1133,23 @@ ApplicationWindow {
                                                 Layout.alignment: Qt.AlignVCenter
                                             }
 
+                                            // Unread Badge (replaces the old red dot)
                                             Rectangle {
-                                                Layout.preferredWidth: 6
-                                                Layout.preferredHeight: 6
-                                                radius: 3
-                                                color: window.palette.accent
+                                                visible: hasUnread && unreadCount > 0
+                                                width: Math.max(20, badgeText.width + 10)
+                                                height: 20
+                                                radius: 10
+                                                color: window.palette.warning
                                                 Layout.alignment: Qt.AlignVCenter
-                                                visible: hasUnread
+
+                                                Text {
+                                                    id: badgeText
+                                                    anchors.centerIn: parent
+                                                    text: unreadCount > 99 ? "99+" : unreadCount.toString()
+                                                    color: window.palette.textPrimary
+                                                    font.pixelSize: window.scaleFont(10)
+                                                    font.bold: true
+                                                }
                                             }
 
                                             Item {
@@ -1096,10 +1301,35 @@ ApplicationWindow {
         }
     }
 
+    // --- SOUND EFFECTS ---
+    SoundEffect {
+        id: publicMessageSound
+        source: Qt.resolvedUrl("../assets/notification_message.wav")
+        volume: 0.5
+
+        Component.onCompleted: {
+            if (status === SoundEffect.Error) {
+                console.warn("[QML] Public message sound not loaded")
+            }
+        }
+    }
+
+    SoundEffect {
+        id: privateMessageSound
+        source: Qt.resolvedUrl("../assets/notification_private.wav")
+        volume: 0.6
+
+        Component.onCompleted: {
+            if (status === SoundEffect.Error) {
+                console.warn("[QML] Private message sound not loaded")
+            }
+        }
+    }
+
     // --- MODELS ---
     ListModel {
         id: conversationTabsModel
-        ListElement { key: "public"; title: "Salon feed"; isPrivate: false; hasUnread: false }
+        ListElement { key: "public"; title: "Salon feed"; isPrivate: false; hasUnread: false; unreadCount: 0 }
     }
     ListModel { id: messagesModel }
     ListModel { id: usersModel }
@@ -2316,13 +2546,14 @@ ApplicationWindow {
                     }
 
                     Rectangle {
+                        id: avatarFallback
                         anchors.fill: parent
                         radius: width / 2
                         visible: !(parent.avatarSource && parent.avatarSource.length > 0)
                         property var fallback: window.avatarGradientFor(model.user)
                         gradient: Gradient {
-                            GradientStop { position: 0.0; color: fallback.top }
-                            GradientStop { position: 1.0; color: fallback.bottom }
+                            GradientStop { position: 0.0; color: avatarFallback.fallback.top }
+                            GradientStop { position: 1.0; color: avatarFallback.fallback.bottom }
                         }
                     }
                 }
@@ -2522,6 +2753,32 @@ ApplicationWindow {
                                 }
                             }
                         }
+
+                        // Context Menu MouseArea for copying
+                        MouseArea {
+                            id: contextMenuArea
+                            anchors.fill: parent
+                            acceptedButtons: Qt.RightButton
+                            propagateComposedEvents: true
+
+                            onPressed: function(mouse) {
+                                if (mouse.button === Qt.RightButton) {
+                                    messageContextMenu.messageText = model.text || ""
+                                    messageContextMenu.userName = model.user || ""
+                                    messageContextMenu.hasText = (model.text && model.text.length > 0)
+                                    messageContextMenu.hasFile = (model.fileName && model.fileName.length > 0)
+                                    messageContextMenu.fileName = model.fileName || ""
+
+                                    // Convert local coordinates to global/window coordinates
+                                    var globalPos = contextMenuArea.mapToItem(null, mouse.x, mouse.y)
+                                    messageContextMenu.popup(globalPos.x, globalPos.y)
+
+                                    mouse.accepted = true
+                                } else {
+                                    mouse.accepted = false
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2660,8 +2917,12 @@ ApplicationWindow {
             window.updatePublicTyping(username, false)
             var idx = window.conversationIndex("public")
             var isActive = idx === conversationTabBar.currentIndex
-            if (!isActive) {
-                window.setConversationUnread("public", true)
+            if (!isActive && username !== chatClient.username) {
+                window.incrementConversationUnread("public")
+            }
+            // Play notification sound for messages from others
+            if (username !== chatClient.username) {
+                window.playSoundIfAllowed(publicMessageSound)
             }
             var page = window.conversationPages["public"]
             if (page && page.scrollToEnd) {
@@ -2885,6 +3146,79 @@ ApplicationWindow {
                 delete snapshot[username]
             }
             window.userAvatars = snapshot
+        }
+    }
+
+    // --- MESSAGE CONTEXT MENU ---
+    Menu {
+        id: messageContextMenu
+
+        property string messageText: ""
+        property string userName: ""
+        property bool hasText: false
+        property bool hasFile: false
+        property string fileName: ""
+
+        width: 200
+
+        background: Rectangle {
+            implicitWidth: 200
+            implicitHeight: 40
+            color: window.palette.panel
+            border.color: window.palette.outline
+            border.width: 1
+            radius: 8
+        }
+
+        delegate: MenuItem {
+            id: menuItem
+
+            contentItem: Text {
+                text: menuItem.text
+                color: menuItem.enabled ? window.palette.textPrimary : window.palette.textSecondary
+                font.pixelSize: window.scaleFont(13)
+                opacity: menuItem.enabled ? 1.0 : 0.5
+                horizontalAlignment: Text.AlignLeft
+                verticalAlignment: Text.AlignVCenter
+            }
+
+            background: Rectangle {
+                color: menuItem.highlighted ? window.palette.surface : "transparent"
+                radius: 4
+            }
+
+            height: 32
+            padding: 8
+        }
+
+        MenuItem {
+            text: "Copy Message"
+            enabled: messageContextMenu.hasText
+            onTriggered: {
+                window.copyToClipboard(messageContextMenu.messageText)
+            }
+        }
+
+        MenuItem {
+            text: "Copy with Username"
+            enabled: messageContextMenu.hasText
+            onTriggered: {
+                var fullText = messageContextMenu.userName + ": " + messageContextMenu.messageText
+                window.copyToClipboard(fullText)
+            }
+        }
+
+        MenuSeparator {
+            visible: messageContextMenu.hasFile
+        }
+
+        MenuItem {
+            text: "Copy Filename"
+            visible: messageContextMenu.hasFile
+            enabled: messageContextMenu.hasFile
+            onTriggered: {
+                window.copyToClipboard(messageContextMenu.fileName)
+            }
         }
     }
 }

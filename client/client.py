@@ -67,6 +67,7 @@ class ChatClient(QObject):
     fileTransferError = Signal(str, str)  # transfer_id, error_message
     avatarsUpdated = Signal("QVariant")  # username -> avatar payload
     avatarUpdated = Signal(str, "QVariant")  # username, avatar payload
+    connectionStateChanged = Signal(str)  # "connected", "reconnecting", "offline"
 
     def __init__(self, url=None):
         super().__init__()
@@ -116,6 +117,7 @@ class ChatClient(QObject):
         self._should_reconnect = True
         self._reconnect_thread = None
         self._user_requested_disconnect = False
+        self._connection_state = "offline"  # Track connection state
 
         self._setup_handlers()
 
@@ -132,6 +134,7 @@ class ChatClient(QObject):
             print("Connected")
             self._connected = True
             self._connecting = False
+            self._set_connection_state("connected")
 
             # Reset reconnection state on successful connection
             was_reconnecting = self._reconnect_attempts > 0
@@ -192,6 +195,7 @@ class ChatClient(QObject):
             print("Disconnected from server")
             self._connected = False
             self._connecting = False
+            self._set_connection_state("offline")
             self._users = []
             self._avatars = {}
             self._pending_events.clear()
@@ -472,6 +476,7 @@ class ChatClient(QObject):
             print(
                 f"[CLIENT] Reconnection attempt {self._reconnect_attempts}/{self._max_reconnect_attempts}..."
             )
+            self._set_connection_state("reconnecting")
             self.reconnecting.emit(self._reconnect_attempts)
 
             try:
@@ -1274,6 +1279,27 @@ class ChatClient(QObject):
         return self._username
 
     username = Property(str, _get_username, notify=usernameChanged)
+
+    @Property(str, notify=connectionStateChanged)
+    def connectionState(self):
+        return self._connection_state
+
+    def _set_connection_state(self, state):
+        if self._connection_state != state:
+            self._connection_state = state
+            self.connectionStateChanged.emit(state)
+
+    @Slot(str)
+    def copyToClipboard(self, text: str):
+        """Copy text to system clipboard"""
+        try:
+            from PySide6.QtGui import QGuiApplication
+            clipboard = QGuiApplication.clipboard()
+            if clipboard:
+                clipboard.setText(text)
+                print(f"[CLIENT] Copied to clipboard: {text[:50]}...")
+        except Exception as e:
+            print(f"[CLIENT] Failed to copy to clipboard: {e}")
 
     # Deprecated key exchange/UI helpers removed under server-managed scheme
 
