@@ -1294,6 +1294,7 @@ class ChatClient(QObject):
         """Copy text to system clipboard"""
         try:
             from PySide6.QtGui import QGuiApplication
+
             clipboard = QGuiApplication.clipboard()
             if clipboard:
                 clipboard.setText(text)
