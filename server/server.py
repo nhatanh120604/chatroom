@@ -3,10 +3,8 @@ from flask import Flask
 import logging
 import os
 import threading
-
-# from dotenv import load_dotenv
+#from dotenv import load_dotenv
 import base64
-import binascii
 from datetime import datetime, timezone
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
@@ -17,7 +15,6 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 MAX_PUBLIC_HISTORY = 200
 MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB safety cap
-MAX_AVATAR_BYTES = 128 * 1024  # 128 KB cap per avatar
 
 
 def _sanitize_file_payload(data):
@@ -53,42 +50,8 @@ def _sanitize_file_payload(data):
     }
 
 
-def _sanitize_avatar_payload(data):
-    """Validate avatar uploads and clamp size/mime types."""
-    if not isinstance(data, dict):
-        return None
-
-    mime = str(data.get("mime", "")).strip().lower()
-    if not mime.startswith("image/"):
-        logging.warning("Rejected avatar with invalid mime: %s", mime)
-        return None
-
-    encoded = data.get("data")
-    if not isinstance(encoded, str) or not encoded:
-        return None
-
-    try:
-        raw = base64.b64decode(encoded, validate=True)
-    except (binascii.Error, ValueError):
-        logging.warning("Rejected avatar with invalid base64 payload")
-        return None
-
-    if not raw or len(raw) > MAX_AVATAR_BYTES:
-        logging.warning("Rejected avatar exceeding size cap")
-        return None
-
-    safe_mime = mime[:64] if mime else "image/png"
-    sanitized = base64.b64encode(raw).decode("ascii")
-
-    return {
-        "mime": safe_mime,
-        "data": sanitized,
-        "updated": datetime.now(timezone.utc).isoformat(),
-    }
-
-
 # Load environment variables from .env file
-# load_dotenv()
+#load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -101,8 +64,6 @@ class ChatServer:
         self.sio = socketio.Server(
             cors_allowed_origins="*",
             max_http_buffer_size=MAX_FILE_BYTES * 2,
-            ping_timeout=10,  # Server waits 10s for ping response before disconnect
-            ping_interval=5,  # Server sends ping every 5s to check connection
         )
         self.app = Flask(__name__)
         self.app.wsgi_app = socketio.WSGIApp(self.sio, self.app.wsgi_app)
@@ -113,14 +74,13 @@ class ChatServer:
         self.private_message_counter = 0
         self.private_messages = {}
         self.session_keys = {}  # sid -> AES key (bytes)
-        self.avatars = {}
         # Uploads directory for caching plaintext files
         self.upload_dir = os.path.join(os.path.dirname(__file__), "uploads")
         try:
             os.makedirs(self.upload_dir, exist_ok=True)
         except OSError:
             pass
-
+        
         # File transfer tracking
         self.active_file_transfers = {}  # transfer_id -> transfer_info
         self.file_transfer_lock = threading.Lock()
@@ -133,13 +93,9 @@ class ChatServer:
         priv_path = os.path.join(base_dir, "private_key.pem")
         if os.path.exists(priv_path):
             with open(priv_path, "rb") as f:
-                return serialization.load_pem_private_key(
-                    f.read(), password=None, backend=default_backend()
-                )
+                return serialization.load_pem_private_key(f.read(), password=None, backend=default_backend())
         # Generate a new RSA key if missing (first boot)
-        key = rsa.generate_private_key(
-            public_exponent=65537, key_size=2048, backend=default_backend()
-        )
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
         private_pem = key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.TraditionalOpenSSL,
@@ -155,10 +111,7 @@ class ChatServer:
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo,
         )
-        logging.warning(
-            "Generated new server RSA key. Distribute this public key to clients:\n%s",
-            public_pem.decode("utf-8"),
-        )
+        logging.warning("Generated new server RSA key. Distribute this public key to clients:\n%s", public_pem.decode("utf-8"))
         # Optionally write server/public_key.pem for convenience
         try:
             with open(os.path.join(base_dir, "public_key.pem"), "wb") as f:
@@ -194,12 +147,11 @@ class ChatServer:
                     self._private_key = self._load_private_key()
             except Exception as e:
                 logging.error(f"Failed to load server private key: {e}")
-
+        
         # Health and public key endpoints
         @self.app.route("/")
         def index():
-            return (
-                """
+            return """
             <html>
             <head><title>FUV Chat Backend</title></head>
             <body style="font-family: Arial, sans-serif; text-align: center; margin-top: 50px;">
@@ -209,9 +161,7 @@ class ChatServer:
                 <p><a href="/health">Health Check</a> | <a href="/public_key">Public Key</a></p>
             </body>
             </html>
-            """,
-                200,
-            )
+            """, 200
 
         @self.app.route("/health")
         def health():
@@ -231,26 +181,15 @@ class ChatServer:
         @self.sio.event
         def disconnect(sid):
             logging.info(f"Client disconnected: {sid}")
-            users_snapshot = []
-            avatars_snapshot = {}
             with self.lock:
                 username = self.clients.pop(sid, None)
                 self.session_keys.pop(sid, None)
                 if username:
-                    self.avatars.pop(username, None)
-                    users_snapshot = list(self.clients.values())
-                    avatars_snapshot = {
-                        user: self.avatars[user]
-                        for user in users_snapshot
-                        if user in self.avatars
-                    }
-            if username:
-                # Notify remaining clients by sending the updated user list
-                self.sio.emit(
-                    "update_user_list",
-                    {"users": users_snapshot, "avatars": avatars_snapshot},
-                )
-                logging.info(f"User left: {username}")
+                    # Notify remaining clients by sending the updated user list
+                    self.sio.emit(
+                        "update_user_list", {"users": list(self.clients.values())}
+                    )
+                    logging.info(f"User left: {username}")
 
         @self.sio.event
         def register(sid, data):
@@ -269,41 +208,24 @@ class ChatServer:
             username = username.strip()
 
             with self.lock:
-                # Check if username is already in use by a DIFFERENT session
-                existing_sid = None
-                for s, name in self.clients.items():
-                    if (name or "").lower() == username.lower():
-                        existing_sid = s
-                        break
-
-                # If the same user is reconnecting (different SID), remove old session
-                if existing_sid and existing_sid != sid:
-                    logging.info(
-                        f"User '{username}' reconnecting - removing old session {existing_sid}"
+                # Enforce unique usernames (case-insensitive)
+                if any((name or "").lower() == username.lower() for name in self.clients.values()):
+                    self.sio.emit(
+                        "error",
+                        {"message": f"Username '{username}' is already taken."},
+                        to=sid,
                     )
-                    self.clients.pop(existing_sid, None)
-                    self.session_keys.pop(existing_sid, None)
-                    # Note: avatar is kept for the username
-                elif existing_sid == sid:
-                    # Same SID trying to re-register - just update
-                    logging.info(
-                        f"User '{username}' re-registering with same SID {sid}"
+                    logging.warning(
+                        f"Registration failed for {sid}: username '{username}' taken."
                     )
+                    return
 
                 self.clients[sid] = username
                 users_snapshot = list(self.clients.values())
-                avatars_snapshot = {
-                    user: self.avatars[user]
-                    for user in users_snapshot
-                    if user in self.avatars
-                }
                 history_snapshot = list(self.public_history)
 
             # Notify all clients (including the new one) with the updated user list
-            self.sio.emit(
-                "update_user_list",
-                {"users": users_snapshot, "avatars": avatars_snapshot},
-            )
+            self.sio.emit("update_user_list", {"users": users_snapshot})
             logging.info(f"User registered: {username} with SID: {sid}")
 
             if history_snapshot:
@@ -313,9 +235,7 @@ class ChatServer:
         def session_key(sid, data):
             enc_key_b64 = data.get("encrypted_aes_key")
             if not enc_key_b64:
-                self.sio.emit(
-                    "error", {"message": "Missing encrypted AES key."}, to=sid
-                )
+                self.sio.emit("error", {"message": "Missing encrypted AES key."}, to=sid)
                 return
             try:
                 enc_bytes = base64.b64decode(enc_key_b64.encode("utf-8"))
@@ -348,15 +268,11 @@ class ChatServer:
                 try:
                     key = self.session_keys.get(sid)
                     if not key:
-                        self.sio.emit(
-                            "error", {"message": "Session key not found."}, to=sid
-                        )
+                        self.sio.emit("error", {"message": "Session key not found."}, to=sid)
                         return
                     ct = base64.b64decode(data.get("ciphertext", ""))
                     iv = base64.b64decode(data.get("iv", ""))
-                    message_text = ChatServer._aes_decrypt(ct, key, iv).decode(
-                        "utf-8", errors="replace"
-                    )
+                    message_text = ChatServer._aes_decrypt(ct, key, iv).decode("utf-8", errors="replace")
                 except Exception as e:
                     self.sio.emit("error", {"message": f"Decrypt failed: {e}"}, to=sid)
                     return
@@ -411,15 +327,11 @@ class ChatServer:
                 try:
                     key = self.session_keys.get(sid)
                     if not key:
-                        self.sio.emit(
-                            "error", {"message": "Session key not found."}, to=sid
-                        )
+                        self.sio.emit("error", {"message": "Session key not found."}, to=sid)
                         return
                     ct = base64.b64decode(data.get("ciphertext", ""))
                     iv = base64.b64decode(data.get("iv", ""))
-                    message = ChatServer._aes_decrypt(ct, key, iv).decode(
-                        "utf-8", errors="replace"
-                    )
+                    message = ChatServer._aes_decrypt(ct, key, iv).decode("utf-8", errors="replace")
                 except Exception as e:
                     self.sio.emit("error", {"message": f"Decrypt failed: {e}"}, to=sid)
                     return
@@ -590,37 +502,6 @@ class ChatServer:
                 )
 
         @self.sio.event
-        def set_avatar(sid, data):
-            with self.lock:
-                username = self.clients.get(sid)
-
-            if not username:
-                self.sio.emit(
-                    "error", {"message": "Register before setting an avatar."}, to=sid
-                )
-                return
-
-            if data is None:
-                removed = False
-                with self.lock:
-                    removed = self.avatars.pop(username, None) is not None
-                if removed:
-                    self.sio.emit(
-                        "avatar_update", {"username": username, "avatar": None}
-                    )
-                return
-
-            payload = _sanitize_avatar_payload(data)
-            if not payload:
-                self.sio.emit("error", {"message": "Invalid avatar payload."}, to=sid)
-                return
-
-            with self.lock:
-                self.avatars[username] = payload
-
-            self.sio.emit("avatar_update", {"username": username, "avatar": payload})
-
-        @self.sio.event
         def private_message_read(sid, data):
             message_ids = data.get("message_ids")
             if message_ids is None:
@@ -679,23 +560,19 @@ class ChatServer:
             transfer_id = data.get("transfer_id")
             success = data.get("success", False)
             error_msg = data.get("error", "")
-
+            
             with self.file_transfer_lock:
                 if transfer_id in self.active_file_transfers:
                     transfer_info = self.active_file_transfers[transfer_id]
-
+                    
                     # Forward acknowledgment to sender
                     if transfer_info.get("sender_sid"):
-                        self.sio.emit(
-                            "file_transfer_ack",
-                            {
-                                "transfer_id": transfer_id,
-                                "success": success,
-                                "error": error_msg,
-                            },
-                            to=transfer_info["sender_sid"],
-                        )
-
+                        self.sio.emit("file_transfer_ack", {
+                            "transfer_id": transfer_id,
+                            "success": success,
+                            "error": error_msg
+                        }, to=transfer_info["sender_sid"])
+                    
                     # Clean up transfer
                     del self.active_file_transfers[transfer_id]
 
@@ -711,14 +588,14 @@ class ChatServer:
         is_last_chunk = data.get("is_last_chunk", False)
         metadata = data.get("metadata")
         recipient = data.get("recipient") if is_private else None
-
+        
         with self.lock:
             sender_username = self.clients.get(sid, "Unknown")
-
+        
         if not all([transfer_id, chunk_index is not None, chunk_data]):
             self.sio.emit("error", {"message": "Invalid file chunk"}, to=sid)
             return
-
+        
         with self.file_transfer_lock:
             # Initialize transfer tracking
             if transfer_id not in self.active_file_transfers:
@@ -732,60 +609,43 @@ class ChatServer:
                     "metadata": None,
                     "encrypted_chunks": {},
                 }
-
+            
             transfer_info = self.active_file_transfers[transfer_id]
-
+            
             # Store metadata from first chunk
             if metadata and chunk_index == 0:
                 transfer_info["metadata"] = metadata
                 transfer_info["total_chunks"] = metadata.get("total_chunks", 0)
                 transfer_info["iv"] = metadata.get("iv")
-
+            
             transfer_info["received_chunks"] += 1
-            transfer_info["encrypted_chunks"][chunk_index] = base64.b64decode(
-                chunk_data
-            )
-
+            transfer_info["encrypted_chunks"][chunk_index] = base64.b64decode(chunk_data)
+            
             # If complete, decrypt and broadcast plaintext chunks
-            if (
-                transfer_info["received_chunks"] >= transfer_info["total_chunks"]
-                and transfer_info["total_chunks"] > 0
-            ):
+            if transfer_info["received_chunks"] >= transfer_info["total_chunks"] and transfer_info["total_chunks"] > 0:
                 try:
                     key = self.session_keys.get(sid)
                     if not key:
-                        self.sio.emit(
-                            "error",
-                            {"message": "Session key not found for file."},
-                            to=sid,
-                        )
+                        self.sio.emit("error", {"message": "Session key not found for file."}, to=sid)
                         del self.active_file_transfers[transfer_id]
                         return
                     iv_b64 = transfer_info.get("iv") or ""
                     iv = base64.b64decode(iv_b64)
                     # Reassemble ciphertext
                     chunks_dict = transfer_info["encrypted_chunks"]
-                    ciphertext = b"".join(
-                        chunks_dict[i] for i in sorted(chunks_dict.keys())
-                    )
+                    ciphertext = b"".join(chunks_dict[i] for i in sorted(chunks_dict.keys()))
                     plaintext = ChatServer._aes_decrypt(ciphertext, key, iv)
 
                     # Cache plaintext to disk
                     filename = transfer_info["metadata"].get("filename", "file")
                     safe_name = os.path.basename(filename) or "file"
-                    out_path = os.path.join(
-                        self.upload_dir, f"{transfer_id}_{safe_name}"
-                    )
+                    out_path = os.path.join(self.upload_dir, f"{transfer_id}_{safe_name}")
                     try:
                         with open(out_path, "wb") as f:
                             f.write(plaintext)
                     except OSError as e:
                         logging.error(f"Failed to cache file: {e}")
-                        self.sio.emit(
-                            "error",
-                            {"message": f"Server failed caching file: {e}"},
-                            to=sid,
-                        )
+                        self.sio.emit("error", {"message": f"Server failed caching file: {e}"}, to=sid)
                         del self.active_file_transfers[transfer_id]
                         return
 
@@ -815,11 +675,7 @@ class ChatServer:
                                 "username": sender_username,
                                 "timestamp": server_ts,
                                 "is_private": bool(transfer_info["is_private"]),
-                                "recipient": (
-                                    transfer_info["recipient"]
-                                    if transfer_info["is_private"]
-                                    else ""
-                                ),
+                                "recipient": transfer_info["recipient"] if transfer_info["is_private"] else "",
                             },
                         }
                         if transfer_info["is_private"] and transfer_info["recipient"]:
@@ -830,17 +686,9 @@ class ChatServer:
                                         target_sid = client_sid
                                         break
                             if target_sid:
-                                self.sio.emit(
-                                    "file_chunk", first_payload, to=target_sid
-                                )
+                                self.sio.emit("file_chunk", first_payload, to=target_sid)
                             else:
-                                self.sio.emit(
-                                    "error",
-                                    {
-                                        "message": f"Recipient '{transfer_info['recipient']}' not found"
-                                    },
-                                    to=sid,
-                                )
+                                self.sio.emit("error", {"message": f"Recipient '{transfer_info['recipient']}' not found"}, to=sid)
                                 return None
                             return target_sid
                         else:
@@ -874,18 +722,14 @@ class ChatServer:
                                 index += 1
                     except OSError as e:
                         logging.error(f"Failed streaming file: {e}")
-                        self.sio.emit(
-                            "error", {"message": f"Server streaming error: {e}"}, to=sid
-                        )
+                        self.sio.emit("error", {"message": f"Server streaming error: {e}"}, to=sid)
                         del self.active_file_transfers[transfer_id]
                         return
 
                     logging.info(f"Decrypted file broadcast complete: {transfer_id}")
                 except Exception as e:
                     logging.error(f"File decrypt/broadcast failed: {e}")
-                    self.sio.emit(
-                        "error", {"message": f"File decrypt failed: {e}"}, to=sid
-                    )
+                    self.sio.emit("error", {"message": f"File decrypt failed: {e}"}, to=sid)
                 finally:
                     # Clean up transfer tracking
                     if transfer_id in self.active_file_transfers:
@@ -895,14 +739,12 @@ class ChatServer:
 # Create server instance at module level for gunicorn
 _chat_server_instance = None
 
-
 def get_app():
     """Get or create server instance (for gunicorn)."""
     global _chat_server_instance
     if _chat_server_instance is None:
         _chat_server_instance = ChatServer()
     return _chat_server_instance.app
-
 
 if __name__ == "__main__":
     server = ChatServer()
@@ -911,11 +753,10 @@ if __name__ == "__main__":
     # Always bind to 0.0.0.0 for cloud deployments (Render, AWS, etc.)
     HOST = os.environ.get("CHAT_HOST", "0.0.0.0")
     logging.info(f"Starting server on {HOST}:{PORT}")
-
+    
     # Use gevent WSGI server for production deployments
     try:
         from gevent import pywsgi
-
         logging.info("Using gevent WSGI server")
         http_server = pywsgi.WSGIServer((HOST, PORT), server.app)
         http_server.serve_forever()

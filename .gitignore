@@ -19,3 +19,9 @@ server/uploads/
 build/
 dist/
 release/*.exe
+
+*.json
+server/sqlite_logging.py
+
+change log.txt
+docker_build.txt

@@ -106,7 +106,11 @@ class ChatClient(QObject):
         self._active_transfers = {}  # transfer_id -> transfer_data
         self._received_chunks = {}  # transfer_id -> {chunk_index: data}
         self._transfer_lock = threading.Lock()
-        self._completed_transfers = set()
+        self._active_transfers = {}  # transfer_id -> transfer_data
+        self._received_chunks = {}  # transfer_id -> {chunk_index: data}
+        self._transfer_lock = threading.Lock()
+        self._download_threads = {}  # transfer_id -> thread
+        #self._completed_transfers = set()
         self._debug_enabled = True
 
         # Reconnection logic
@@ -371,77 +375,83 @@ class ChatClient(QObject):
                 bool(metadata),
             )
 
-            ready_to_reassemble = False
+            should_reassemble = False
             with self._transfer_lock:
-                if transfer_id in self._completed_transfers:
-                    # Ignore any late chunks after completion
-                    return
+                # Initialize chunk storage
                 if transfer_id not in self._received_chunks:
                     self._received_chunks[transfer_id] = {}
 
                 # Store chunk data
-                self._received_chunks[transfer_id][chunk_index] = base64.b64decode(
-                    chunk_data
-                )
+                try:
+                    self._received_chunks[transfer_id][chunk_index] = base64.b64decode(
+                        chunk_data
+                    )
+                except Exception as e:
+                    self._dbg(f"Failed to decode chunk {chunk_index}: {e}")
+                    return
 
                 # Store metadata from first chunk
                 if metadata and chunk_index == 0:
                     self._active_transfers[transfer_id] = metadata
+                    self._dbg(
+                        f"Stored metadata for {transfer_id}: "
+                        f"total_chunks={metadata.get('total_chunks')}, "
+                        f"filename={metadata.get('filename')}"
+                    )
 
-                # Check if all chunks received (use stored metadata if not provided on this chunk)
+                # Check if all chunks received
                 stored_meta = self._active_transfers.get(transfer_id, {})
-                expected_chunks = 0
-                if metadata and metadata.get("total_chunks"):
-                    expected_chunks = int(metadata.get("total_chunks", 0))
-                elif stored_meta and stored_meta.get("total_chunks"):
-                    expected_chunks = int(stored_meta.get("total_chunks", 0))
-                # Fallback to last-chunk index if server did not include total
-                if (
-                    expected_chunks == 0
-                    and bool(is_last_chunk)
-                    and isinstance(chunk_index, int)
-                ):
-                    expected_chunks = int(chunk_index) + 1
+                expected_chunks = stored_meta.get("total_chunks", 0)
+                
+                # Fallback if metadata missing
+                if expected_chunks == 0 and metadata:
+                    expected_chunks = metadata.get("total_chunks", 0)
+                
+                if expected_chunks == 0 and is_last_chunk:
+                    expected_chunks = chunk_index + 1
+
                 received_count = len(self._received_chunks[transfer_id])
+                
                 self._dbg(
-                    "file_chunk progress:",
-                    "id=",
-                    transfer_id,
-                    "received=",
-                    received_count,
-                    "expected=",
-                    expected_chunks,
+                    f"Progress for {transfer_id}: "
+                    f"received={received_count}, expected={expected_chunks}"
                 )
 
                 # Emit progress
-                self.fileTransferProgress.emit(
-                    transfer_id, received_count, expected_chunks
-                )
+                self.fileTransferProgress.emit(transfer_id, received_count, expected_chunks)
 
+                # Check if ready to reassemble
                 if received_count >= expected_chunks and expected_chunks > 0:
-                    # All chunks received, reassemble file (outside lock to avoid deadlock)
-                    ready_to_reassemble = True
+                    should_reassemble = True
 
-            if ready_to_reassemble:
-                self._dbg("reassembling file:", transfer_id)
-                self._reassemble_file(transfer_id)
+            # Start background reassembly
+            if should_reassemble:
+                self._dbg(f"Starting background reassembly for {transfer_id}")
+                thread = threading.Thread(
+                    target=self._reassemble_file_background,
+                    args=(transfer_id,),
+                    daemon=True
+                )
+                with self._transfer_lock:
+                    self._download_threads[transfer_id] = thread
+                thread.start()
 
-        @self._sio.on("file_transfer_ack")
-        def on_file_transfer_ack(data):
-            """Handle file transfer acknowledgment."""
-            transfer_id = data.get("transfer_id")
-            success = data.get("success", False)
-            error_msg = data.get("error", "")
+            @self._sio.on("file_transfer_ack")
+            def on_file_transfer_ack(data):
+                """Handle file transfer acknowledgment."""
+                transfer_id = data.get("transfer_id")
+                success = data.get("success", False)
+                error_msg = data.get("error", "")
 
-            if success:
-                self.fileTransferComplete.emit(transfer_id, "")
-            else:
-                self.fileTransferError.emit(transfer_id, error_msg)
+                if success:
+                    self.fileTransferComplete.emit(transfer_id, "")
+                else:
+                    self.fileTransferError.emit(transfer_id, error_msg)
 
-            # Clean up transfer data
-            with self._transfer_lock:
-                self._active_transfers.pop(transfer_id, None)
-                self._received_chunks.pop(transfer_id, None)
+                # Clean up transfer data
+                with self._transfer_lock:
+                    self._active_transfers.pop(transfer_id, None)
+                    self._received_chunks.pop(transfer_id, None)
 
         # Messages from server are plaintext after server-side decryption
 
@@ -636,121 +646,123 @@ class ChatClient(QObject):
         self._emit_when_connected("request_history", {})
         self._history_synced = True
 
-    def _reassemble_file(self, transfer_id: str):
-        """Reassemble and decrypt received file chunks."""
+    def _reassemble_file_background(self, transfer_id: str):
+        """Reassemble file in background thread."""
         try:
+            self._dbg(f"[BACKGROUND] Reassembling {transfer_id}")
+            
+            # Get data from locked section
             with self._transfer_lock:
-                if (
-                    transfer_id not in self._active_transfers
-                    or transfer_id not in self._received_chunks
-                ):
+                if transfer_id not in self._active_transfers:
+                    self._dbg(f"No metadata for {transfer_id}")
+                    return
+                if transfer_id not in self._received_chunks:
+                    self._dbg(f"No chunks for {transfer_id}")
                     return
 
-                metadata = self._active_transfers[transfer_id]
-                chunks_dict = self._received_chunks[transfer_id]
+                metadata = dict(self._active_transfers[transfer_id])
+                chunks_dict = dict(self._received_chunks[transfer_id])
 
-                # Sort chunks by index
-                sorted_chunks = [chunks_dict[i] for i in sorted(chunks_dict.keys())]
+            # Reassemble outside lock
+            sorted_indices = sorted(chunks_dict.keys())
+            data_bytes = b"".join(chunks_dict[i] for i in sorted_indices)
+            
+            self._dbg(
+                f"[BACKGROUND] Reassembled {len(data_bytes)} bytes "
+                f"from {len(sorted_indices)} chunks"
+            )
 
-                # If metadata lacks encryption fields, treat as plaintext
-                if (
-                    not metadata
-                    or metadata.get("encrypted_aes_key")
-                    or metadata.get("iv")
-                ):
-                    # Backward compatibility (old encrypted flow not expected now)
-                    data_bytes = b"".join(sorted_chunks)
-                else:
-                    data_bytes = b"".join(sorted_chunks)
+            # Save to temp file
+            filename = metadata.get("filename", "received_file")
+            temp_path = self.saveFileToTemp(
+                filename,
+                base64.b64encode(data_bytes).decode("utf-8"),
+                metadata.get("mime", "application/octet-stream"),
+            )
 
-                # Save file to temp directory
-                filename = metadata.get("filename", "received_file")
-                temp_path = self.saveFileToTemp(
-                    filename,
-                    base64.b64encode(data_bytes).decode("utf-8"),
-                    "application/octet-stream",
-                )
+            if not temp_path:
+                raise Exception("Failed to save file to temp directory")
 
-                self.fileTransferComplete.emit(transfer_id, filename)
-                print(f"File {filename} received and saved to {temp_path}")
+            self._dbg(f"[BACKGROUND] Saved to {temp_path}")
 
-                # Emit a message entry so the UI shows the received file in the chat feed
-                try:
-                    import mimetypes as _m
+            # Emit completion signal
+            self.fileTransferComplete.emit(transfer_id, filename)
 
-                    mime, _ = _m.guess_type(filename)
-                    mime = mime or "application/octet-stream"
-                except Exception:
-                    mime = "application/octet-stream"
-                is_private = False
-                recipient = ""
-                if isinstance(metadata, dict):
-                    recipient = metadata.get("recipient", "") or ""
-                    # Treat as private if server tagged it or if a recipient is specified
-                    is_private = bool(metadata.get("is_private")) or (
-                        len(recipient) > 0
+            # Determine if private
+            is_private = bool(metadata.get("is_private"))
+            recipient = metadata.get("recipient", "")
+            username = metadata.get("username", "Unknown")
+            timestamp = metadata.get("timestamp", "")
+
+            # Prepare file payload for UI
+            try:
+                import mimetypes as _m
+                mime, _ = _m.guess_type(filename)
+                mime = mime or "application/octet-stream"
+            except Exception:
+                mime = "application/octet-stream"
+
+            file_payload = {
+                "name": filename,
+                "size": len(data_bytes),
+                "mime": mime,
+                "data": base64.b64encode(data_bytes).decode("ascii"),
+                "is_private": is_private,
+                "recipient": recipient,
+                "transfer_id": transfer_id,
+            }
+
+            # Emit to UI (Qt will queue to main thread)
+            if not timestamp:
+                from datetime import datetime, timezone
+                timestamp = datetime.now(timezone.utc).isoformat()
+
+            if is_private:
+                # Private message
+                sender = username
+                is_outgoing = self._username and sender == self._username
+                
+                if not is_outgoing:
+                    # Incoming private file
+                    self.privateMessageReceivedEx.emit(
+                        sender,
+                        recipient or self._username,
+                        "",
+                        0,
+                        "delivered",
+                        file_payload,
+                        timestamp,
                     )
-                file_payload = {
-                    "name": filename,
-                    "size": len(data_bytes),
-                    "mime": mime,
-                    "data": base64.b64encode(data_bytes).decode("ascii"),
-                    "is_private": is_private,
-                    "recipient": recipient,
-                    "transfer_id": transfer_id,
-                }
-                username = metadata.get("username", "Unknown")
-                # Emit directly; Qt will queue the signal to the GUI thread.
-                self._dbg(
-                    "emitting file message:",
-                    username,
-                    file_payload.get("name", ""),
-                    file_payload.get("size", 0),
-                )
-                ts = metadata.get("timestamp") if isinstance(metadata, dict) else ""
-                if not ts:
-                    from datetime import datetime, timezone
+                    self._dbg(f"[BACKGROUND] Emitted private file from {sender}")
+            else:
+                # Public message
+                self.messageReceived.emit(username, "", file_payload)
+                self.messageReceivedEx.emit(username, "", file_payload, timestamp)
+                self._dbg(f"[BACKGROUND] Emitted public file from {username}")
 
-                    ts = datetime.now(timezone.utc).isoformat()
-                if is_private:
-                    # Route to private conversation
-                    sender = username
-                    # Determine outgoing vs incoming
-                    is_outgoing = self._username and sender == self._username
-                    if is_outgoing:
-                        # Sent by us: we already appended optimistically when sending; avoid duplicate
-                        self._dbg(
-                            "skip duplicate append for sender private file:",
-                            transfer_id,
-                        )
-                    else:
-                        # Received by us
-                        self.privateMessageReceivedEx.emit(
-                            sender,
-                            recipient or self._username,
-                            "",
-                            0,
-                            "delivered",
-                            file_payload,
-                            ts,
-                        )
-                else:
-                    # Public feed
-                    self.messageReceived.emit(username, "", file_payload)
-                    self.messageReceivedEx.emit(username, "", file_payload, ts)
+            # Cleanup
+            with self._transfer_lock:
+                self._active_transfers.pop(transfer_id, None)
+                self._received_chunks.pop(transfer_id, None)
+                self._download_threads.pop(transfer_id, None)
 
-                # Mark completed and cleanup to avoid duplicate reassembly
-                with self._transfer_lock:
-                    self._completed_transfers.add(transfer_id)
-                    self._active_transfers.pop(transfer_id, None)
-                    self._received_chunks.pop(transfer_id, None)
+            self._dbg(f"[BACKGROUND] Completed {transfer_id}")
 
         except Exception as e:
+            self._dbg(f"[BACKGROUND] Error reassembling {transfer_id}: {e}")
             self.fileTransferError.emit(
-                transfer_id, "File transfer failed. Please try again."
+                transfer_id, f"File reassembly failed: {str(e)}"
             )
-            print(f"Error reassembling file {transfer_id}: {e}")
+            
+            # Cleanup on error
+            with self._transfer_lock:
+                self._active_transfers.pop(transfer_id, None)
+                self._received_chunks.pop(transfer_id, None)
+                self._download_threads.pop(transfer_id, None)
 
+    def _reassemble_file(self, transfer_id: str):
+        self._reassemble_file_background(transfer_id)
+        
     def _send_encrypted_file_chunks(
         self, file_data: bytes, filename: str, recipient: str = None
     ):

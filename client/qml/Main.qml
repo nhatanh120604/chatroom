@@ -44,6 +44,38 @@ ApplicationWindow {
                                                 ? "Apple Color Emoji"
                                                 : "Noto Color Emoji, Noto Emoji, Symbola, DejaVu Sans")
 
+    property var activeDownloads: ({})  // transfer_id -> {progress, filename}
+    
+    // Add this function to track download progress
+    function updateDownloadProgress(transferId, current, total) {
+        var snapshot = Object.assign({}, activeDownloads)
+        if (current >= total && total > 0) {
+            // Download complete, will be removed by onFileTransferComplete
+            if (snapshot[transferId]) {
+                snapshot[transferId].progress = 1.0
+            }
+        } else if (total > 0) {
+            if (!snapshot[transferId]) {
+                snapshot[transferId] = {
+                    progress: 0,
+                    filename: "",
+                    current: current,
+                    total: total
+                }
+            }
+            snapshot[transferId].progress = current / total
+            snapshot[transferId].current = current
+            snapshot[transferId].total = total
+        }
+        activeDownloads = snapshot
+    }
+    
+    function clearDownload(transferId) {
+        var snapshot = Object.assign({}, activeDownloads)
+        delete snapshot[transferId]
+        activeDownloads = snapshot
+    }
+
     function avatarGradientFor(name) {
         return avatarDefaultColors
     }
@@ -76,6 +108,15 @@ ApplicationWindow {
     property bool soundsEnabled: true
     property var lastSoundTime: new Date(0)
     property int soundDebounceMs: 500  // Min 500ms between sounds
+
+    function showToast(message, isError) {
+        console.log("[QML] showToast called:", message, "error:", isError)
+        if (toast) {
+            toast.show(message, isError || false)
+        } else {
+            console.error("[QML] toast not found!")
+        }
+    }
 
     function formatTimestamp(ts) {
         try {
@@ -1286,20 +1327,21 @@ ApplicationWindow {
         }
     }
 
-    Platform.FileDialog {
-        id: avatarFileDialog
-        title: "Choose an avatar image"
-        nameFilters: ["Images (*.png *.jpg *.jpeg *.gif *.bmp *.webp)"]
-        onAccepted: {
-            var target = ""
-            if (avatarFileDialog.file && avatarFileDialog.file.toString)
-                target = avatarFileDialog.file.toString()
-            else if (avatarFileDialog.files && avatarFileDialog.files.length > 0)
-                target = avatarFileDialog.files[0].toString()
-            if (target && target.length > 0)
-                chatClient.setAvatar(target)
-        }
-    }
+
+    // Platform.FileDialog {
+    //     id: avatarFileDialog
+    //     title: "Choose an avatar image"
+    //     nameFilters: ["Images (*.png *.jpg *.jpeg *.gif *.bmp *.webp)"]
+    //     onAccepted: {
+    //         var target = ""
+    //         if (avatarFileDialog.file && avatarFileDialog.file.toString)
+    //             target = avatarFileDialog.file.toString()
+    //         else if (avatarFileDialog.files && avatarFileDialog.files.length > 0)
+    //             target = avatarFileDialog.files[0].toString()
+    //         if (target && target.length > 0)
+    //             chatClient.setAvatar(target)
+    //     }
+    // }
 
     // --- SOUND EFFECTS ---
     SoundEffect {
@@ -2683,37 +2725,63 @@ ApplicationWindow {
                                         }
                                     }
 
-                                    // Save dialog for choosing download location
-                                    Platform.FileDialog {
-                                        id: saveAttachmentDialog
-                                        title: "Save attachment"
-                                        fileMode: Platform.FileDialog.SaveFile
-                                        nameFilters: ["All files (*)"]
-                                        property string payloadData: ""
-                                        onAccepted: {
-                                            var chosen = selectedFile || file || currentFile
-                                            if (!chosen || chosen.length === 0)
-                                                return
-                                            var result = chatClient.saveFileToPath(chosen, payloadData)
-                                            if (result && result.length > 0)
-                                                console.log("[QML] File saved to:", result)
+                                    
+                                Button {
+                                    text: "Download"
+                                    focusPolicy: Qt.NoFocus
+                                    enabled: model.fileData && model.fileData.length > 0
+                                    
+                                    background: Rectangle {
+                                        radius: 8
+                                        color: parent.enabled ? (parent.hovered ? palette.accent : palette.canvas) : palette.surface
+                                        border.color: palette.outline
+                                        border.width: 1
+                                        
+                                        Behavior on color {
+                                            ColorAnimation { duration: 150 }
                                         }
                                     }
-
-                                    Button {
-                                        text: "Download"
-                                        focusPolicy: Qt.NoFocus
-                                        onClicked: {
-                                            if (!model.fileData || model.fileData.length === 0)
-                                                return
-                                            saveAttachmentDialog.payloadData = model.fileData
-                                            // Suggest the original filename
-                                            try { saveAttachmentDialog.currentFile = model.fileName } catch(e) {}
-                                            saveAttachmentDialog.open()
+                                    
+                                    contentItem: Text {
+                                        text: parent.text
+                                        color: parent.enabled ? palette.textPrimary : palette.textSecondary
+                                        font.pixelSize: window.scaleFont(12)
+                                        horizontalAlignment: Text.AlignHCenter
+                                        verticalAlignment: Text.AlignVCenter
+                                    }
+                                    
+                                    onClicked: {
+                                        if (!model.fileData || model.fileData.length === 0) {
+                                            console.error("[QML] Cannot download: file data is empty")
+                                            window.showToast("Failed to download: No file data", true)
+                                            return
                                         }
+                                        
+                                        console.log("[QML] Downloading:", model.fileName)
+                                        
+                                        var result = chatClient.saveFileToDownloads(
+                                            model.fileName || "download",
+                                            model.fileData,
+                                            model.fileMime || "application/octet-stream"
+                                        )
+                                        
+                                        if (result && result.length > 0) {
+                                            console.log("[QML] ✓ File saved to:", result)
+                                            window.showToast("Downloaded: " + model.fileName, false)
+                                        } else {
+                                            console.error("[QML] ✗ Download failed")
+                                            window.showToast("Failed to download: " + model.fileName, true)
+                                        }
+                                    }
+                                    
+                                    ToolTip {
+                                        visible: parent.hovered && (!model.fileData || model.fileData.length === 0)
+                                        text: "File data not available"
+                                        delay: 500
                                     }
                                 }
                             }
+                        }
 
                             RowLayout {
                                 width: parent.width
@@ -3147,6 +3215,24 @@ ApplicationWindow {
             }
             window.userAvatars = snapshot
         }
+
+        function onFileTransferComplete(transferId, filename) {
+            console.log("[QML] File download complete:", transferId, filename)
+            window.clearDownload(transferId)
+            
+            // Show toast instead of system message
+            if (filename && filename.length > 0) {
+                window.showToast("File received: " + filename, false)
+            }
+        }
+
+        function onFileTransferError(transferId, errorMessage) {
+            console.error("[QML] File download error:", transferId, errorMessage)
+            window.clearDownload(transferId)
+            
+            // Show error toast
+            window.showToast("Download failed: " + errorMessage, true)
+        }
     }
 
     // --- MESSAGE CONTEXT MENU ---
@@ -3221,5 +3307,112 @@ ApplicationWindow {
             }
         }
     }
+
+     // Toast Notification Component
+    Rectangle {
+        id: toast
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 80
+        width: Math.min(400, parent.width - 64)
+        height: toastContent.implicitHeight + 32
+        radius: 16
+        color: palette.panel
+        border.color: palette.accent
+        border.width: 1
+        opacity: 0
+        visible: opacity > 0
+        z: 10000 // Ensure it's on top of everything
+        
+        property string message: ""
+        property string icon: "✓"
+        property bool isError: false
+        
+        // Shadow effect
+        layer.enabled: true
+        layer.effect: MultiEffect {
+            shadowEnabled: true
+            shadowHorizontalOffset: 0
+            shadowVerticalOffset: 8
+            shadowBlur: 24
+            shadowColor: "#40000000"
+        }
+        
+        RowLayout {
+            id: toastContent
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 12
+            
+            Text {
+                text: toast.icon
+                color: toast.isError ? palette.warning : palette.success
+                font.pixelSize: window.scaleFont(20)
+                font.family: window.emojiFontFamily
+            }
+            
+            Text {
+                text: toast.message
+                color: palette.textPrimary
+                font.pixelSize: window.scaleFont(14)
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+        }
+        
+        // Slide up and fade in animation
+        ParallelAnimation {
+            id: showToast
+            PropertyAnimation {
+                target: toast
+                property: "opacity"
+                to: 1
+                duration: 300
+                easing.type: Easing.OutCubic
+            }
+            PropertyAnimation {
+                target: toast
+                property: "anchors.bottomMargin"
+                to: 80
+                duration: 300
+                easing.type: Easing.OutCubic
+            }
+        }
+        
+        // Slide down and fade out animation
+        ParallelAnimation {
+            id: hideToast
+            PropertyAnimation {
+                target: toast
+                property: "opacity"
+                to: 0
+                duration: 250
+                easing.type: Easing.InCubic
+            }
+            PropertyAnimation {
+                target: toast
+                property: "anchors.bottomMargin"
+                to: 40
+                duration: 250
+                easing.type: Easing.InCubic
+            }
+        }
+        
+        Timer {
+            id: toastTimer
+            interval: 3000
+            onTriggered: hideToast.start()
+        }
+        
+        function show(msg, isErr) {
+            toast.message = msg
+            toast.isError = isErr || false
+            toast.icon = isErr ? "✗" : "✓"
+            toast.anchors.bottomMargin = 40
+            showToast.start()
+            toastTimer.restart()
+        }
+    }
+
 }
 }
