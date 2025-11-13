@@ -576,10 +576,6 @@ class ChatServer:
                     # Clean up transfer
                     del self.active_file_transfers[transfer_id]
 
-        # Deprecated encrypted_message route removed
-
-        # Deprecated encrypted_private_message route removed
-
     def _handle_file_chunk(self, sid, data, is_private=False):
         """Handle encrypted file chunks."""
         transfer_id = data.get("transfer_id")
@@ -588,14 +584,14 @@ class ChatServer:
         is_last_chunk = data.get("is_last_chunk", False)
         metadata = data.get("metadata")
         recipient = data.get("recipient") if is_private else None
-        
+
         with self.lock:
             sender_username = self.clients.get(sid, "Unknown")
-        
+
         if not all([transfer_id, chunk_index is not None, chunk_data]):
             self.sio.emit("error", {"message": "Invalid file chunk"}, to=sid)
             return
-        
+
         with self.file_transfer_lock:
             # Initialize transfer tracking
             if transfer_id not in self.active_file_transfers:
@@ -609,31 +605,40 @@ class ChatServer:
                     "metadata": None,
                     "encrypted_chunks": {},
                 }
-            
+
             transfer_info = self.active_file_transfers[transfer_id]
-            
+
             # Store metadata from first chunk
             if metadata and chunk_index == 0:
                 transfer_info["metadata"] = metadata
                 transfer_info["total_chunks"] = metadata.get("total_chunks", 0)
                 transfer_info["iv"] = metadata.get("iv")
-            
+
             transfer_info["received_chunks"] += 1
             transfer_info["encrypted_chunks"][chunk_index] = base64.b64decode(chunk_data)
-            
+
             # If complete, decrypt and broadcast plaintext chunks
-            if transfer_info["received_chunks"] >= transfer_info["total_chunks"] and transfer_info["total_chunks"] > 0:
+            if (
+                transfer_info["received_chunks"] >= transfer_info["total_chunks"]
+                and transfer_info["total_chunks"] > 0
+            ):
                 try:
                     key = self.session_keys.get(sid)
                     if not key:
-                        self.sio.emit("error", {"message": "Session key not found for file."}, to=sid)
+                        self.sio.emit(
+                            "error",
+                            {"message": "Session key not found for file."},
+                            to=sid,
+                        )
                         del self.active_file_transfers[transfer_id]
                         return
                     iv_b64 = transfer_info.get("iv") or ""
                     iv = base64.b64decode(iv_b64)
                     # Reassemble ciphertext
                     chunks_dict = transfer_info["encrypted_chunks"]
-                    ciphertext = b"".join(chunks_dict[i] for i in sorted(chunks_dict.keys()))
+                    ciphertext = b"".join(
+                        chunks_dict[i] for i in sorted(chunks_dict.keys())
+                    )
                     plaintext = ChatServer._aes_decrypt(ciphertext, key, iv)
 
                     # Cache plaintext to disk
@@ -645,7 +650,11 @@ class ChatServer:
                             f.write(plaintext)
                     except OSError as e:
                         logging.error(f"Failed to cache file: {e}")
-                        self.sio.emit("error", {"message": f"Server failed caching file: {e}"}, to=sid)
+                        self.sio.emit(
+                            "error",
+                            {"message": f"Server failed caching file: {e}"},
+                            to=sid,
+                        )
                         del self.active_file_transfers[transfer_id]
                         return
 
@@ -654,84 +663,91 @@ class ChatServer:
                     total_size = len(plaintext)
                     total_chunks = max(1, (total_size + chunk_size - 1) // chunk_size)
 
-                    def emit_first_and_get_target():
-                        server_ts = datetime.now(timezone.utc).isoformat()
-                        first_chunk = b""
-                        try:
-                            with open(out_path, "rb") as f:
-                                first_chunk = f.read(chunk_size)
-                        except OSError:
-                            pass
-                        first_payload = {
-                            "transfer_id": transfer_id,
-                            "chunk_index": 0,
-                            "chunk_data": base64.b64encode(first_chunk).decode("utf-8"),
-                            "is_last_chunk": total_chunks == 1,
-                            "metadata": {
-                                "filename": safe_name,
-                                "total_size": total_size,
-                                "total_chunks": total_chunks,
-                                "chunk_size": chunk_size,
-                                "username": sender_username,
-                                "timestamp": server_ts,
-                                "is_private": bool(transfer_info["is_private"]),
-                                "recipient": transfer_info["recipient"] if transfer_info["is_private"] else "",
-                            },
-                        }
-                        if transfer_info["is_private"] and transfer_info["recipient"]:
-                            target_sid = None
-                            with self.lock:
-                                for client_sid, username in self.clients.items():
-                                    if username == transfer_info["recipient"]:
-                                        target_sid = client_sid
-                                        break
-                            if target_sid:
-                                self.sio.emit("file_chunk", first_payload, to=target_sid)
-                            else:
-                                self.sio.emit("error", {"message": f"Recipient '{transfer_info['recipient']}' not found"}, to=sid)
-                                return None
-                            return target_sid
-                        else:
-                            self.sio.emit("file_chunk", first_payload)
-                            return "__broadcast__"
+                    # Determine target (broadcast or specific recipient)
+                    target_sid = None
+                    if transfer_info["is_private"] and transfer_info["recipient"]:
+                        with self.lock:
+                            for client_sid, username in self.clients.items():
+                                if username == transfer_info["recipient"]:
+                                    target_sid = client_sid
+                                    break
+                        if not target_sid:
+                            self.sio.emit(
+                                "error",
+                                {
+                                    "message": f"Recipient '{transfer_info['recipient']}' not found"
+                                },
+                                to=sid,
+                            )
+                            del self.active_file_transfers[transfer_id]
+                            return
 
-                    target = emit_first_and_get_target()
-                    if not target:
-                        del self.active_file_transfers[transfer_id]
-                        return
+                    server_ts = datetime.now(timezone.utc).isoformat()
 
-                    # Remaining chunks
+                    # Send all chunks
                     try:
                         with open(out_path, "rb") as f:
-                            f.seek(chunk_size)
-                            index = 1
-                            while True:
-                                buf = f.read(chunk_size)
-                                if not buf:
+                            for chunk_idx in range(total_chunks):
+                                chunk_data = f.read(chunk_size)
+                                if not chunk_data:
                                     break
+
                                 payload = {
                                     "transfer_id": transfer_id,
-                                    "chunk_index": index,
-                                    "chunk_data": base64.b64encode(buf).decode("utf-8"),
-                                    "is_last_chunk": index == total_chunks - 1,
+                                    "chunk_index": chunk_idx,
+                                    "chunk_data": base64.b64encode(chunk_data).decode(
+                                        "utf-8"
+                                    ),
+                                    "is_last_chunk": chunk_idx == total_chunks - 1,
                                 }
-                                if target == "__broadcast__":
-                                    self.sio.emit("file_chunk", payload)
+
+                                # Include metadata in first chunk
+                                if chunk_idx == 0:
+                                    payload["metadata"] = {
+                                        "filename": safe_name,
+                                        "total_size": total_size,
+                                        "total_chunks": total_chunks,
+                                        "chunk_size": chunk_size,
+                                        "username": sender_username,
+                                        "timestamp": server_ts,
+                                        "is_private": bool(transfer_info["is_private"]),
+                                        "recipient": (
+                                            transfer_info["recipient"]
+                                            if transfer_info["is_private"]
+                                            else ""
+                                        ),
+                                    }
+
+                                # Emit to target or broadcast
+                                if target_sid:
+                                    self.sio.emit("file_chunk", payload, to=target_sid)
                                 else:
-                                    self.sio.emit("file_chunk", payload, to=target)
-                                index += 1
+                                    self.sio.emit("file_chunk", payload)
+
+                        logging.info(
+                            f"Decrypted file broadcast complete: {transfer_id} ({total_chunks} chunks)"
+                        )
+
                     except OSError as e:
                         logging.error(f"Failed streaming file: {e}")
-                        self.sio.emit("error", {"message": f"Server streaming error: {e}"}, to=sid)
-                        del self.active_file_transfers[transfer_id]
-                        return
+                        self.sio.emit(
+                            "error", {"message": f"Server streaming error: {e}"}, to=sid
+                        )
+                    finally:
+                        # Clean up transfer tracking and temp file
+                        if transfer_id in self.active_file_transfers:
+                            del self.active_file_transfers[transfer_id]
+                        try:
+                            os.remove(out_path)
+                        except OSError:
+                            pass
 
-                    logging.info(f"Decrypted file broadcast complete: {transfer_id}")
                 except Exception as e:
                     logging.error(f"File decrypt/broadcast failed: {e}")
-                    self.sio.emit("error", {"message": f"File decrypt failed: {e}"}, to=sid)
-                finally:
-                    # Clean up transfer tracking
+                    self.sio.emit(
+                        "error", {"message": f"File decrypt failed: {e}"}, to=sid
+                    )
+                    # Clean up on error
                     if transfer_id in self.active_file_transfers:
                         del self.active_file_transfers[transfer_id]
 
