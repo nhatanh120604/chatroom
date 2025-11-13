@@ -52,7 +52,9 @@ class ChatClient(QObject):
     publicTypingReceived = Signal(str, bool)  # username, is typing
     privateTypingReceived = Signal(str, bool)  # username, is typing
     usersUpdated = Signal("QVariant")  # list of usernames
-    disconnected = Signal()  # Signal to notify QML of disconnection
+    disconnected = Signal(
+        bool
+    )  # Signal to notify QML of disconnection (user_requested)
     reconnecting = Signal(
         int
     )  # Signal to notify QML of reconnection attempt (attempt number)
@@ -110,7 +112,7 @@ class ChatClient(QObject):
         self._received_chunks = {}  # transfer_id -> {chunk_index: data}
         self._transfer_lock = threading.Lock()
         self._download_threads = {}  # transfer_id -> thread
-        #self._completed_transfers = set()
+        # self._completed_transfers = set()
         self._debug_enabled = True
 
         # Reconnection logic
@@ -196,7 +198,7 @@ class ChatClient(QObject):
 
         @self._sio.event
         def disconnect():
-            print("Disconnected from server")
+            print("Logged out from server")
             self._connected = False
             self._connecting = False
             self._set_connection_state("offline")
@@ -208,7 +210,7 @@ class ChatClient(QObject):
             self.usersUpdated.emit([])
             self.avatarsUpdated.emit({})
             self._set_username("")
-            self.disconnected.emit()  # Notify the UI
+            self.disconnected.emit(self._user_requested_disconnect)  # Notify the UI
             self._history_synced = False
 
             # Start automatic reconnection if not a user-requested disconnect
@@ -402,23 +404,25 @@ class ChatClient(QObject):
                 # Check if all chunks received
                 stored_meta = self._active_transfers.get(transfer_id, {})
                 expected_chunks = stored_meta.get("total_chunks", 0)
-                
+
                 # Fallback if metadata missing
                 if expected_chunks == 0 and metadata:
                     expected_chunks = metadata.get("total_chunks", 0)
-                
+
                 if expected_chunks == 0 and is_last_chunk:
                     expected_chunks = chunk_index + 1
 
                 received_count = len(self._received_chunks[transfer_id])
-                
+
                 self._dbg(
                     f"Progress for {transfer_id}: "
                     f"received={received_count}, expected={expected_chunks}"
                 )
 
                 # Emit progress
-                self.fileTransferProgress.emit(transfer_id, received_count, expected_chunks)
+                self.fileTransferProgress.emit(
+                    transfer_id, received_count, expected_chunks
+                )
 
                 # Check if ready to reassemble
                 if received_count >= expected_chunks and expected_chunks > 0:
@@ -430,7 +434,7 @@ class ChatClient(QObject):
                 thread = threading.Thread(
                     target=self._reassemble_file_background,
                     args=(transfer_id,),
-                    daemon=True
+                    daemon=True,
                 )
                 with self._transfer_lock:
                     self._download_threads[transfer_id] = thread
@@ -650,7 +654,7 @@ class ChatClient(QObject):
         """Reassemble file in background thread."""
         try:
             self._dbg(f"[BACKGROUND] Reassembling {transfer_id}")
-            
+
             # Get data from locked section
             with self._transfer_lock:
                 if transfer_id not in self._active_transfers:
@@ -666,7 +670,7 @@ class ChatClient(QObject):
             # Reassemble outside lock
             sorted_indices = sorted(chunks_dict.keys())
             data_bytes = b"".join(chunks_dict[i] for i in sorted_indices)
-            
+
             self._dbg(
                 f"[BACKGROUND] Reassembled {len(data_bytes)} bytes "
                 f"from {len(sorted_indices)} chunks"
@@ -697,6 +701,7 @@ class ChatClient(QObject):
             # Prepare file payload for UI
             try:
                 import mimetypes as _m
+
                 mime, _ = _m.guess_type(filename)
                 mime = mime or "application/octet-stream"
             except Exception:
@@ -715,13 +720,14 @@ class ChatClient(QObject):
             # Emit to UI (Qt will queue to main thread)
             if not timestamp:
                 from datetime import datetime, timezone
+
                 timestamp = datetime.now(timezone.utc).isoformat()
 
             if is_private:
                 # Private message
                 sender = username
                 is_outgoing = self._username and sender == self._username
-                
+
                 if not is_outgoing:
                     # Incoming private file
                     self.privateMessageReceivedEx.emit(
@@ -753,7 +759,7 @@ class ChatClient(QObject):
             self.fileTransferError.emit(
                 transfer_id, f"File reassembly failed: {str(e)}"
             )
-            
+
             # Cleanup on error
             with self._transfer_lock:
                 self._active_transfers.pop(transfer_id, None)
@@ -762,7 +768,7 @@ class ChatClient(QObject):
 
     def _reassemble_file(self, transfer_id: str):
         self._reassemble_file_background(transfer_id)
-        
+
     def _send_encrypted_file_chunks(
         self, file_data: bytes, filename: str, recipient: str = None
     ):

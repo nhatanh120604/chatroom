@@ -45,7 +45,7 @@ ApplicationWindow {
                                                 : "Noto Color Emoji, Noto Emoji, Symbola, DejaVu Sans")
 
     property var activeDownloads: ({})  // transfer_id -> {progress, filename}
-    
+
     // Add this function to track download progress
     function updateDownloadProgress(transferId, current, total) {
         var snapshot = Object.assign({}, activeDownloads)
@@ -69,7 +69,7 @@ ApplicationWindow {
         }
         activeDownloads = snapshot
     }
-    
+
     function clearDownload(transferId) {
         var snapshot = Object.assign({}, activeDownloads)
         delete snapshot[transferId]
@@ -2725,23 +2725,23 @@ ApplicationWindow {
                                         }
                                     }
 
-                                    
+
                                 Button {
                                     text: "Download"
                                     focusPolicy: Qt.NoFocus
                                     enabled: model.fileData && model.fileData.length > 0
-                                    
+
                                     background: Rectangle {
                                         radius: 8
                                         color: parent.enabled ? (parent.hovered ? palette.accent : palette.canvas) : palette.surface
                                         border.color: palette.outline
                                         border.width: 1
-                                        
+
                                         Behavior on color {
                                             ColorAnimation { duration: 150 }
                                         }
                                     }
-                                    
+
                                     contentItem: Text {
                                         text: parent.text
                                         color: parent.enabled ? palette.textPrimary : palette.textSecondary
@@ -2749,31 +2749,62 @@ ApplicationWindow {
                                         horizontalAlignment: Text.AlignHCenter
                                         verticalAlignment: Text.AlignVCenter
                                     }
-                                    
+
                                     onClicked: {
                                         if (!model.fileData || model.fileData.length === 0) {
                                             console.error("[QML] Cannot download: file data is empty")
-                                            window.showToast("Failed to download: No file data", true)
                                             return
                                         }
-                                        
+
                                         console.log("[QML] Downloading:", model.fileName)
-                                        
+
                                         var result = chatClient.saveFileToDownloads(
                                             model.fileName || "download",
                                             model.fileData,
                                             model.fileMime || "application/octet-stream"
                                         )
-                                        
+
+                                        // Add system message to the correct conversation
+                                        var systemMessage = {
+                                            "user": "System",
+                                            "text": result && result.length > 0
+                                                ? "File downloaded successfully: " + model.fileName
+                                                : "Failed to download file: " + model.fileName,
+                                            "fileName": "",
+                                            "fileMime": "",
+                                            "fileData": "",
+                                            "fileSize": 0,
+                                            "timestamp": formatTimestamp("")
+                                        }
+
+                                        if (model.isPrivate) {
+                                            // Add to private conversation
+                                            var currentTab = conversationTabsModel.get(conversationTabBar.currentIndex)
+                                            if (currentTab && currentTab.isPrivate) {
+                                                var peerModel = window.privateMessageModels[currentTab.key]
+                                                if (peerModel) {
+                                                    systemMessage.isPrivate = true
+                                                    systemMessage.isOutgoing = false
+                                                    systemMessage.displayContext = "System"
+                                                    systemMessage.status = ""
+                                                    systemMessage.messageId = 0
+                                                    systemMessage.readNotified = true
+                                                    peerModel.append(systemMessage)
+                                                }
+                                            }
+                                        } else {
+                                            // Add to public chat
+                                            systemMessage.isPrivate = false
+                                            messagesModel.append(systemMessage)
+                                        }
+
                                         if (result && result.length > 0) {
                                             console.log("[QML] ✓ File saved to:", result)
-                                            window.showToast("Downloaded: " + model.fileName, false)
                                         } else {
                                             console.error("[QML] ✗ Download failed")
-                                            window.showToast("Failed to download: " + model.fileName, true)
                                         }
                                     }
-                                    
+
                                     ToolTip {
                                         visible: parent.hovered && (!model.fileData || model.fileData.length === 0)
                                         text: "File data not available"
@@ -3118,21 +3149,36 @@ ApplicationWindow {
             window.userAvatars = trimmedAvatars
         }
 
-        function onDisconnected() {
+        function onDisconnected(userRequested) {
             messagesModel.clear()
             usersModel.clear()
             window.totalUserCount = 0
             window.resetPrivateConversations()
             window.userAvatars = ({})
-            messagesModel.append({
-                "user": "System",
-                "text": "Connection lost. Attempting to reconnect...",
-                "isPrivate": false,
-                "fileName": "",
-                "fileMime": "",
-                "fileData": "",
-                "fileSize": 0
-            })
+
+            // Show different messages based on whether user clicked logout
+            if (userRequested) {
+                messagesModel.append({
+                    "user": "System",
+                    "text": "Disconnected from server",
+                    "isPrivate": false,
+                    "fileName": "",
+                    "fileMime": "",
+                    "fileData": "",
+                    "fileSize": 0
+                })
+            } else {
+                messagesModel.append({
+                    "user": "System",
+                    "text": "Connection lost. Attempting to reconnect...",
+                    "isPrivate": false,
+                    "fileName": "",
+                    "fileMime": "",
+                    "fileData": "",
+                    "fileSize": 0
+                })
+            }
+
             window.setConversationUnread("public", false)
             disconnectAnimation.restart()
         }
@@ -3217,21 +3263,26 @@ ApplicationWindow {
         }
 
         function onFileTransferComplete(transferId, filename) {
-            console.log("[QML] File download complete:", transferId, filename)
+            console.log("[QML] File transfer complete:", transferId, filename)
             window.clearDownload(transferId)
-            
-            // Show toast instead of system message
-            if (filename && filename.length > 0) {
-                window.showToast("File received: " + filename, false)
-            }
+            // File is now available in the message, user can click download button
         }
 
         function onFileTransferError(transferId, errorMessage) {
-            console.error("[QML] File download error:", transferId, errorMessage)
+            console.error("[QML] File transfer error:", transferId, errorMessage)
             window.clearDownload(transferId)
-            
-            // Show error toast
-            window.showToast("Download failed: " + errorMessage, true)
+
+            // Show error in public chat since we don't know which conversation this belongs to
+            messagesModel.append({
+                "user": "System",
+                "text": "File transfer failed: " + errorMessage,
+                "isPrivate": false,
+                "fileName": "",
+                "fileMime": "",
+                "fileData": "",
+                "fileSize": 0,
+                "timestamp": formatTimestamp("")
+            })
         }
     }
 
@@ -3323,11 +3374,11 @@ ApplicationWindow {
         opacity: 0
         visible: opacity > 0
         z: 10000 // Ensure it's on top of everything
-        
+
         property string message: ""
         property string icon: "✓"
         property bool isError: false
-        
+
         // Shadow effect
         layer.enabled: true
         layer.effect: MultiEffect {
@@ -3337,20 +3388,20 @@ ApplicationWindow {
             shadowBlur: 24
             shadowColor: "#40000000"
         }
-        
+
         RowLayout {
             id: toastContent
             anchors.fill: parent
             anchors.margins: 16
             spacing: 12
-            
+
             Text {
                 text: toast.icon
                 color: toast.isError ? palette.warning : palette.success
                 font.pixelSize: window.scaleFont(20)
                 font.family: window.emojiFontFamily
             }
-            
+
             Text {
                 text: toast.message
                 color: palette.textPrimary
@@ -3359,7 +3410,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
             }
         }
-        
+
         // Slide up and fade in animation
         ParallelAnimation {
             id: showToast
@@ -3378,7 +3429,7 @@ ApplicationWindow {
                 easing.type: Easing.OutCubic
             }
         }
-        
+
         // Slide down and fade out animation
         ParallelAnimation {
             id: hideToast
@@ -3397,13 +3448,13 @@ ApplicationWindow {
                 easing.type: Easing.InCubic
             }
         }
-        
+
         Timer {
             id: toastTimer
-            interval: 3000
+            interval: 4000  // 4 seconds for better visibility
             onTriggered: hideToast.start()
         }
-        
+
         function show(msg, isErr) {
             toast.message = msg
             toast.isError = isErr || false

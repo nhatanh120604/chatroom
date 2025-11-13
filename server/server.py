@@ -3,7 +3,8 @@ from flask import Flask
 import logging
 import os
 import threading
-#from dotenv import load_dotenv
+
+# from dotenv import load_dotenv
 import base64
 from datetime import datetime, timezone
 from cryptography.hazmat.backends import default_backend
@@ -51,7 +52,7 @@ def _sanitize_file_payload(data):
 
 
 # Load environment variables from .env file
-#load_dotenv()
+# load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -80,7 +81,7 @@ class ChatServer:
             os.makedirs(self.upload_dir, exist_ok=True)
         except OSError:
             pass
-        
+
         # File transfer tracking
         self.active_file_transfers = {}  # transfer_id -> transfer_info
         self.file_transfer_lock = threading.Lock()
@@ -93,9 +94,13 @@ class ChatServer:
         priv_path = os.path.join(base_dir, "private_key.pem")
         if os.path.exists(priv_path):
             with open(priv_path, "rb") as f:
-                return serialization.load_pem_private_key(f.read(), password=None, backend=default_backend())
+                return serialization.load_pem_private_key(
+                    f.read(), password=None, backend=default_backend()
+                )
         # Generate a new RSA key if missing (first boot)
-        key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
+        key = rsa.generate_private_key(
+            public_exponent=65537, key_size=2048, backend=default_backend()
+        )
         private_pem = key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.TraditionalOpenSSL,
@@ -111,7 +116,10 @@ class ChatServer:
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo,
         )
-        logging.warning("Generated new server RSA key. Distribute this public key to clients:\n%s", public_pem.decode("utf-8"))
+        logging.warning(
+            "Generated new server RSA key. Distribute this public key to clients:\n%s",
+            public_pem.decode("utf-8"),
+        )
         # Optionally write server/public_key.pem for convenience
         try:
             with open(os.path.join(base_dir, "public_key.pem"), "wb") as f:
@@ -147,11 +155,12 @@ class ChatServer:
                     self._private_key = self._load_private_key()
             except Exception as e:
                 logging.error(f"Failed to load server private key: {e}")
-        
+
         # Health and public key endpoints
         @self.app.route("/")
         def index():
-            return """
+            return (
+                """
             <html>
             <head><title>FUV Chat Backend</title></head>
             <body style="font-family: Arial, sans-serif; text-align: center; margin-top: 50px;">
@@ -161,7 +170,9 @@ class ChatServer:
                 <p><a href="/health">Health Check</a> | <a href="/public_key">Public Key</a></p>
             </body>
             </html>
-            """, 200
+            """,
+                200,
+            )
 
         @self.app.route("/health")
         def health():
@@ -191,6 +202,15 @@ class ChatServer:
                     )
                     logging.info(f"User left: {username}")
 
+                    # Send system notification that user left
+                    server_ts = datetime.now(timezone.utc).isoformat()
+                    system_message = {
+                        "username": "System",
+                        "message": f"{username} has left the chat",
+                        "timestamp": server_ts,
+                    }
+                    self.sio.emit("message", system_message)
+
         @self.sio.event
         def register(sid, data):
             username = data.get("username")
@@ -209,7 +229,10 @@ class ChatServer:
 
             with self.lock:
                 # Enforce unique usernames (case-insensitive)
-                if any((name or "").lower() == username.lower() for name in self.clients.values()):
+                if any(
+                    (name or "").lower() == username.lower()
+                    for name in self.clients.values()
+                ):
                     self.sio.emit(
                         "error",
                         {"message": f"Username '{username}' is already taken."},
@@ -235,7 +258,9 @@ class ChatServer:
         def session_key(sid, data):
             enc_key_b64 = data.get("encrypted_aes_key")
             if not enc_key_b64:
-                self.sio.emit("error", {"message": "Missing encrypted AES key."}, to=sid)
+                self.sio.emit(
+                    "error", {"message": "Missing encrypted AES key."}, to=sid
+                )
                 return
             try:
                 enc_bytes = base64.b64decode(enc_key_b64.encode("utf-8"))
@@ -268,11 +293,15 @@ class ChatServer:
                 try:
                     key = self.session_keys.get(sid)
                     if not key:
-                        self.sio.emit("error", {"message": "Session key not found."}, to=sid)
+                        self.sio.emit(
+                            "error", {"message": "Session key not found."}, to=sid
+                        )
                         return
                     ct = base64.b64decode(data.get("ciphertext", ""))
                     iv = base64.b64decode(data.get("iv", ""))
-                    message_text = ChatServer._aes_decrypt(ct, key, iv).decode("utf-8", errors="replace")
+                    message_text = ChatServer._aes_decrypt(ct, key, iv).decode(
+                        "utf-8", errors="replace"
+                    )
                 except Exception as e:
                     self.sio.emit("error", {"message": f"Decrypt failed: {e}"}, to=sid)
                     return
@@ -327,11 +356,15 @@ class ChatServer:
                 try:
                     key = self.session_keys.get(sid)
                     if not key:
-                        self.sio.emit("error", {"message": "Session key not found."}, to=sid)
+                        self.sio.emit(
+                            "error", {"message": "Session key not found."}, to=sid
+                        )
                         return
                     ct = base64.b64decode(data.get("ciphertext", ""))
                     iv = base64.b64decode(data.get("iv", ""))
-                    message = ChatServer._aes_decrypt(ct, key, iv).decode("utf-8", errors="replace")
+                    message = ChatServer._aes_decrypt(ct, key, iv).decode(
+                        "utf-8", errors="replace"
+                    )
                 except Exception as e:
                     self.sio.emit("error", {"message": f"Decrypt failed: {e}"}, to=sid)
                     return
@@ -560,19 +593,23 @@ class ChatServer:
             transfer_id = data.get("transfer_id")
             success = data.get("success", False)
             error_msg = data.get("error", "")
-            
+
             with self.file_transfer_lock:
                 if transfer_id in self.active_file_transfers:
                     transfer_info = self.active_file_transfers[transfer_id]
-                    
+
                     # Forward acknowledgment to sender
                     if transfer_info.get("sender_sid"):
-                        self.sio.emit("file_transfer_ack", {
-                            "transfer_id": transfer_id,
-                            "success": success,
-                            "error": error_msg
-                        }, to=transfer_info["sender_sid"])
-                    
+                        self.sio.emit(
+                            "file_transfer_ack",
+                            {
+                                "transfer_id": transfer_id,
+                                "success": success,
+                                "error": error_msg,
+                            },
+                            to=transfer_info["sender_sid"],
+                        )
+
                     # Clean up transfer
                     del self.active_file_transfers[transfer_id]
 
@@ -615,7 +652,9 @@ class ChatServer:
                 transfer_info["iv"] = metadata.get("iv")
 
             transfer_info["received_chunks"] += 1
-            transfer_info["encrypted_chunks"][chunk_index] = base64.b64decode(chunk_data)
+            transfer_info["encrypted_chunks"][chunk_index] = base64.b64decode(
+                chunk_data
+            )
 
             # If complete, decrypt and broadcast plaintext chunks
             if (
@@ -644,7 +683,9 @@ class ChatServer:
                     # Cache plaintext to disk
                     filename = transfer_info["metadata"].get("filename", "file")
                     safe_name = os.path.basename(filename) or "file"
-                    out_path = os.path.join(self.upload_dir, f"{transfer_id}_{safe_name}")
+                    out_path = os.path.join(
+                        self.upload_dir, f"{transfer_id}_{safe_name}"
+                    )
                     try:
                         with open(out_path, "wb") as f:
                             f.write(plaintext)
@@ -755,12 +796,14 @@ class ChatServer:
 # Create server instance at module level for gunicorn
 _chat_server_instance = None
 
+
 def get_app():
     """Get or create server instance (for gunicorn)."""
     global _chat_server_instance
     if _chat_server_instance is None:
         _chat_server_instance = ChatServer()
     return _chat_server_instance.app
+
 
 if __name__ == "__main__":
     server = ChatServer()
@@ -769,14 +812,25 @@ if __name__ == "__main__":
     # Always bind to 0.0.0.0 for cloud deployments (Render, AWS, etc.)
     HOST = os.environ.get("CHAT_HOST", "0.0.0.0")
     logging.info(f"Starting server on {HOST}:{PORT}")
-    
-    # Use gevent WSGI server for production deployments
+
+    # Try eventlet first (best for socketio), then gevent, then flask dev server
     try:
-        from gevent import pywsgi
-        logging.info("Using gevent WSGI server")
-        http_server = pywsgi.WSGIServer((HOST, PORT), server.app)
-        http_server.serve_forever()
+        import eventlet
+        import eventlet.wsgi
+
+        logging.info("Using eventlet WSGI server (recommended for Socket.IO)")
+        eventlet.wsgi.server(eventlet.listen((HOST, PORT)), server.app)
     except ImportError:
-        # Fallback to Flask dev server (not for production)
-        logging.warning("gevent not available, using Flask dev server")
-        server.app.run(host=HOST, port=PORT, debug=False)
+        try:
+            from gevent import pywsgi
+            from geventwebsocket.handler import WebSocketHandler
+
+            logging.info("Using gevent WSGI server with WebSocket support")
+            http_server = pywsgi.WSGIServer(
+                (HOST, PORT), server.app, handler_class=WebSocketHandler
+            )
+            http_server.serve_forever()
+        except ImportError:
+            # Fallback to Flask dev server (not for production)
+            logging.warning("eventlet/gevent not available, using Flask dev server")
+            server.app.run(host=HOST, port=PORT, debug=False)

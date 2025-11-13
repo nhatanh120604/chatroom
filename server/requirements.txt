@@ -1,6 +1,8 @@
 setuptools>=65.0.0
 Flask==3.0.0
+click>=8.1.0
 python-socketio==5.11.0
+eventlet==0.33.3
 gevent==23.9.1
 gevent-websocket==0.10.1
 gunicorn==21.2.0
