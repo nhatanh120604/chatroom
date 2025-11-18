@@ -1,0 +1,11 @@
+Avatar 1.0 Avatar.qml
+Composer 1.0 Composer.qml
+ConversationTabs 1.0 ConversationTabs.qml
+FileAttachment 1.0 FileAttachment.qml
+Header 1.0 Header.qml
+MessageBubble 1.0 MessageBubble.qml
+StatusIndicator 1.0 StatusIndicator.qml
+Toast 1.0 Toast.qml
+UserCard 1.0 UserCard.qml
+UserList 1.0 UserList.qml
+TypingIndicator 1.0 TypingIndicator.qml

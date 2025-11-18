@@ -1,10 +1,11 @@
+// Main.qml
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
-import QtQuick.Effects 6.6
 import QtMultimedia
-import Qt.labs.platform 1.1 as Platform
-
+import "./styles"
+import "./components"
+import "./pages"
 
 ApplicationWindow {
     id: window
@@ -12,112 +13,65 @@ ApplicationWindow {
     width: 920
     height: 600
     title: "Aurora Chat"
-    color: palette.window
-
-    readonly property var palette: ({
-        window: "#090C12",
-        gradientTop: "#111927",
-        gradientBottom: "#07090D",
-        panel: "#121A26",
-        surface: "#152033",
-        card: "#1A2738",
-        canvas: "#1F2D40",
-        accent: "#E0C184",
-        accentSoft: "#26E0C184",
-        accentBold: "#F3DCA3",
-        textPrimary: "#F4F7FB",
-        textSecondary: "#A5AEC1",
-        outline: "#222E42",
-        success: "#35A57C",
-        warning: "#CE6C6C"
-    })
-
-    readonly property var avatarDefaultColors: ({ top: "#6DE5AE", bottom: "#2C9C6D" })
-
-    readonly property real fontScale: 1.12
-    function scaleFont(size) {
-        return Math.round(size * fontScale)
-    }
-    readonly property string emojiFontFamily: Qt.platform.os === "windows"
-                                             ? "Segoe UI Emoji"
-                                             : (Qt.platform.os === "osx"
-                                                ? "Apple Color Emoji"
-                                                : "Noto Color Emoji, Noto Emoji, Symbola, DejaVu Sans")
-
-    property var activeDownloads: ({})  // transfer_id -> {progress, filename}
-
-    // Add this function to track download progress
-    function updateDownloadProgress(transferId, current, total) {
-        var snapshot = Object.assign({}, activeDownloads)
-        if (current >= total && total > 0) {
-            // Download complete, will be removed by onFileTransferComplete
-            if (snapshot[transferId]) {
-                snapshot[transferId].progress = 1.0
-            }
-        } else if (total > 0) {
-            if (!snapshot[transferId]) {
-                snapshot[transferId] = {
-                    progress: 0,
-                    filename: "",
-                    current: current,
-                    total: total
-                }
-            }
-            snapshot[transferId].progress = current / total
-            snapshot[transferId].current = current
-            snapshot[transferId].total = total
-        }
-        activeDownloads = snapshot
-    }
-
-    function clearDownload(transferId) {
-        var snapshot = Object.assign({}, activeDownloads)
-        delete snapshot[transferId]
-        activeDownloads = snapshot
-    }
-
-    function avatarGradientFor(name) {
-        return avatarDefaultColors
-    }
-
-    function avatarSourceFor(name) {
-        if (!name || !userAvatars || !userAvatars[name] || !userAvatars[name].data) {
-            return ""
-        }
-        var info = userAvatars[name]
-        var mime = info.mime && info.mime.length > 0 ? info.mime : "image/png"
-        return "data:" + mime + ";base64," + info.data
-    }
-
+    color: Theme.window
+    
+    // ========== STATE ==========
     property var privateMessageModels: ({})
-    property var privateSeenTransfers: ({}) // peer -> set/dict of transfer_ids
-    property var privateDrafts: ({})
-    property string publicDraft: ""
     property var conversationPages: ({})
-    property int totalUserCount: 0
-    property var publicTypingUsers: []
-    property string publicTypingText: ""
+    property var privateDrafts: ({})
+    property var privatePendingFiles: ({})
     property var privateTypingStates: ({})
     property var messageIndexById: ({})
-    property var emojiOptions: ["😀", "😂", "😍", "😎", "👍", "🙏", "🎉", "❤️", "🔥", "🤔", "🥳", "🤩", "😢", "😡"]
-    property var publicPendingFile: null
-    property var privatePendingFiles: ({})
     property var userAvatars: ({})
-
-    // Sound notification settings
+    
+    property string publicDraft: ""
+    property var publicPendingFile: null
+    property var publicTypingUsers: []
+    property int totalUserCount: 0
+    
     property bool soundsEnabled: true
     property var lastSoundTime: new Date(0)
-    property int soundDebounceMs: 500  // Min 500ms between sounds
-
-    function showToast(message, isError) {
-        console.log("[QML] showToast called:", message, "error:", isError)
-        if (toast) {
-            toast.show(message, isError || false)
-        } else {
-            console.error("[QML] toast not found!")
+    property int soundDebounceMs: 500
+    
+    // ========== MODELS ==========
+    ListModel {
+        id: conversationTabsModel
+        ListElement { 
+            key: "public"
+            title: "Salon feed"
+            isPrivate: false
+            hasUnread: false
+            unreadCount: 0
         }
     }
-
+    
+    ListModel { id: messagesModel }
+    ListModel { id: usersModel }
+    
+    // ========== SOUND EFFECTS ==========
+    SoundEffect {
+        id: publicMessageSound
+        source: Qt.resolvedUrl("./assets/notification_message.wav")
+        volume: 0.5
+    }
+    
+    SoundEffect {
+        id: privateMessageSound
+        source: Qt.resolvedUrl("./assets/notification_private.wav")
+        volume: 0.6
+    }
+    
+    // ========== HELPER FUNCTIONS ==========
+    function playSoundIfAllowed(soundEffect) {
+        if (!soundsEnabled) return
+        
+        var now = new Date()
+        if (now - lastSoundTime > soundDebounceMs) {
+            soundEffect.play()
+            lastSoundTime = now
+        }
+    }
+    
     function formatTimestamp(ts) {
         try {
             if (ts && ts.length > 0) {
@@ -128,17 +82,27 @@ ApplicationWindow {
         } catch(e) {}
         return Qt.formatDateTime(new Date(), "hh:mm ap")
     }
-
-    function ensurePrivateModel(peer) {
-        if (!peer) {
-            return null
+    
+    function avatarSourceFor(name) {
+        if (!name || !userAvatars || !userAvatars[name] || !userAvatars[name].data) {
+            return ""
         }
+        var info = userAvatars[name]
+        var mime = info.mime && info.mime.length > 0 ? info.mime : "image/png"
+        return "data:" + mime + ";base64," + info.data
+    }
+    
+    function ensurePrivateModel(peer) {
+        if (!peer) return null
         if (!privateMessageModels[peer]) {
-            privateMessageModels[peer] = Qt.createQmlObject('import QtQuick 2.15; ListModel {}', window)
+            privateMessageModels[peer] = Qt.createQmlObject(
+                'import QtQuick 2.15; ListModel {}', 
+                window
+            )
         }
         return privateMessageModels[peer]
     }
-
+    
     function conversationIndex(key) {
         for (var i = 0; i < conversationTabsModel.count; ++i) {
             if (conversationTabsModel.get(i).key === key) {
@@ -147,161 +111,45 @@ ApplicationWindow {
         }
         return -1
     }
-
-    function buildPublicTypingText(list) {
-        if (!list || list.length === 0) {
-            return ""
+    
+    function openPrivateConversation(peer) {
+        if (!peer || peer === chatClient.username) return
+        
+        ensurePrivateModel(peer)
+        if (conversationIndex(peer) === -1) {
+            conversationTabsModel.append({
+                "key": peer,
+                "title": peer,
+                "isPrivate": true,
+                "hasUnread": false,
+                "unreadCount": 0
+            })
         }
-        if (list.length === 1) {
-            return list[0] + " is typing..."
-        }
-        if (list.length === 2) {
-            return list[0] + " and " + list[1] + " are typing..."
-        }
-        return list[0] + ", " + list[1] + " and others are typing..."
-    }
-
-    function updatePublicTyping(username, isTyping) {
-        if (!username || username.length === 0 || username === chatClient.username) {
-            return
-        }
-        var current = publicTypingUsers.slice()
-        var index = current.indexOf(username)
-        if (isTyping && index === -1) {
-            current.push(username)
-        } else if (!isTyping && index !== -1) {
-            current.splice(index, 1)
-        }
-        publicTypingUsers = current
-        publicTypingText = buildPublicTypingText(current)
-    }
-
-    function updatePrivateTyping(peer, isTyping) {
-        if (!peer || peer.length === 0) {
-            return
-        }
-        var snapshot = Object.assign({}, privateTypingStates)
-        if (isTyping) {
-            snapshot[peer] = true
-        } else if (snapshot[peer]) {
-            delete snapshot[peer]
-        }
-        privateTypingStates = snapshot
-    }
-
-    function insertEmojiIntoField(field, emoji) {
-        if (!field || !emoji || emoji.length === 0) {
-            return
-        }
-        var cursor = field.cursorPosition
-        var current = field.text || ""
-        field.text = current.slice(0, cursor) + emoji + current.slice(cursor)
-        field.cursorPosition = cursor + emoji.length
-    }
-
-    function formatFileSize(bytes) {
-        var value = Number(bytes)
-        if (!value || isNaN(value) || value <= 0) {
-            return ""
-        }
-        if (value < 1024) {
-            return value + " B"
-        }
-        if (value < 1024 * 1024) {
-            return (value / 1024).toFixed(1) + " KB"
-        }
-        return (value / (1024 * 1024)).toFixed(1) + " MB"
-    }
-
-    function copyToClipboard(text) {
-        if (!text || text.length === 0) {
-            return
-        }
-        chatClient.copyToClipboard(text)
-        console.log("Copied to clipboard:", text.substring(0, 50))
-    }
-
-    function playSoundIfAllowed(soundEffect) {
-        if (!soundsEnabled) {
-            return
-        }
-        var now = new Date()
-        if (now - lastSoundTime > soundDebounceMs) {
-            soundEffect.play()
-            lastSoundTime = now
+        
+        var idx = conversationIndex(peer)
+        if (idx >= 0) {
+            conversationTabBar.currentIndex = idx
         }
     }
-
-    function setPrivateMessageStatusById(messageId, status) {
-        if (!messageId || messageId <= 0) {
-            return
-        }
-        var target = messageIndexById[messageId]
-        if (target) {
-            var model = privateMessageModels[target.peer]
-            if (model && target.index < model.count) {
-                model.setProperty(target.index, "status", status)
-                return
-            }
-        }
-        var peers = Object.keys(privateMessageModels)
-        for (var i = 0; i < peers.length; ++i) {
-            var peer = peers[i]
-            var model = privateMessageModels[peer]
-            if (!model) {
-                continue
-            }
-            for (var j = 0; j < model.count; ++j) {
-                var row = model.get(j)
-                if (row && row.messageId === messageId) {
-                    model.setProperty(j, "status", status)
-                    var updated = Object.assign({}, messageIndexById)
-                    updated[messageId] = {"peer": peer, "index": j}
-                    messageIndexById = updated
-                    return
-                }
-            }
+    
+    function closePrivateConversation(peer) {
+        var idx = conversationIndex(peer)
+        if (idx > 0) {
+            conversationTabsModel.remove(idx)
+            delete conversationPages[peer]
+            delete privateDrafts[peer]
+            delete privatePendingFiles[peer]
         }
     }
-
-    function markPrivateMessagesAsRead(peer) {
-        if (!peer || peer.length === 0) {
-            return
-        }
-        var model = privateMessageModels[peer]
-        if (!model) {
-            return
-        }
-        var ids = []
-        for (var i = 0; i < model.count; ++i) {
-            var entry = model.get(i)
-            if (!entry || entry.isOutgoing === true) {
-                continue
-            }
-            if (!entry.messageId || entry.messageId <= 0) {
-                continue
-            }
-            if (entry.readNotified === true) {
-                continue
-            }
-            ids.push(entry.messageId)
-            model.setProperty(i, "readNotified", true)
-        }
-        if (ids.length > 0) {
-            chatClient.markPrivateMessagesRead(peer, ids)
-        }
-    }
-
-    function setConversationUnread(key, unread) {
+    
+    function clearConversationUnread(key) {
         var idx = conversationIndex(key)
         if (idx >= 0) {
-            conversationTabsModel.setProperty(idx, "hasUnread", unread)
-            if (!unread) {
-                conversationTabsModel.setProperty(idx, "unreadCount", 0)
-            }
+            conversationTabsModel.setProperty(idx, "hasUnread", false)
+            conversationTabsModel.setProperty(idx, "unreadCount", 0)
         }
     }
-
+    
     function incrementConversationUnread(key) {
         var idx = conversationIndex(key)
         if (idx >= 0) {
@@ -310,179 +158,62 @@ ApplicationWindow {
             conversationTabsModel.setProperty(idx, "hasUnread", true)
         }
     }
-
-    function clearConversationUnread(key) {
-        var idx = conversationIndex(key)
-        if (idx >= 0) {
-            conversationTabsModel.setProperty(idx, "hasUnread", false)
-            conversationTabsModel.setProperty(idx, "unreadCount", 0)
-        }
-    }
-
-    function setPrivatePendingFile(peer, info) {
-        if (!peer || peer.length === 0) {
-            return
-        }
-        var snapshot = Object.assign({}, privatePendingFiles)
-        if (info) {
-            snapshot[peer] = info
-        } else if (snapshot.hasOwnProperty(peer)) {
-            delete snapshot[peer]
-        }
-        privatePendingFiles = snapshot
-    }
-
-    function getPrivatePendingFile(peer) {
-        if (!peer || peer.length === 0) {
-            return null
-        }
-        return privatePendingFiles[peer] ? privatePendingFiles[peer] : null
-    }
-
-    function registerConversationPage(key, page) {
-        conversationPages[key] = page
-    }
-
-    function unregisterConversationPage(key) {
-        delete conversationPages[key]
-    }
-
-    function focusActiveComposer() {
-        var current = conversationTabsModel.count > 0 ? conversationTabsModel.get(conversationTabBar.currentIndex) : null
-        if (!current) {
-            return
-        }
-        var page = conversationPages[current.key]
-        if (page && page.forceComposerFocus) {
-            page.forceComposerFocus()
-        }
-    }
-
-    function onConversationActivated(index) {
-        if (index < 0 || index >= conversationTabsModel.count) {
-            return
-        }
-        var tab = conversationTabsModel.get(index)
-        var key = tab.key
-        setConversationUnread(key, false)
-        if (tab.isPrivate === true) {
-            markPrivateMessagesAsRead(key)
-        }
-        focusActiveComposer()
-        var page = conversationPages[key]
-        if (page && page.scrollToEnd) {
-            page.scrollToEnd(false)
-        }
-    }
-
+    
     function appendPrivateMessage(peer, author, text, isOutgoing, messageId, status, filePayload, timestamp) {
-        if (!peer || peer.length === 0) {
-            return
-        }
-        text = text || ""
-        if (text.length === 0) {
-            if (!filePayload || !filePayload.name || !filePayload.data) {
-                return
-            }
-        }
-        // De-dup by transfer_id if present
-        var tid = (filePayload && filePayload.transfer_id) ? String(filePayload.transfer_id) : ""
-        if (tid && privateSeenTransfers[peer] && privateSeenTransfers[peer][tid]) {
-            return
-        }
-        if (!author || author.length === 0) {
-            author = isOutgoing === true ? (chatClient.username && chatClient.username.length > 0 ? chatClient.username : "You") : peer
-        }
+        if (!peer || peer.length === 0) return
+        
         var model = ensurePrivateModel(peer)
-        if (!model) {
-            return
-        }
-        if (tid) {
-            if (!privateSeenTransfers[peer]) privateSeenTransfers[peer] = {}
-            privateSeenTransfers[peer][tid] = true
-        }
+        if (!model) return
+        
         if (conversationIndex(peer) === -1) {
-            conversationTabsModel.append({"key": peer, "title": peer, "isPrivate": true, "hasUnread": false, "unreadCount": 0})
+            conversationTabsModel.append({
+                "key": peer,
+                "title": peer,
+                "isPrivate": true,
+                "hasUnread": false,
+                "unreadCount": 0
+            })
         }
-        var resolvedStatus = status && status.length > 0 ? status : (isOutgoing === true ? "sent" : "delivered")
-        var resolvedId = messageId && messageId > 0 ? messageId : 0
-        var fileInfo = filePayload ? filePayload : null
-        var fileName = fileInfo && fileInfo.name ? fileInfo.name : ""
-        var fileMime = fileInfo && fileInfo.mime ? fileInfo.mime : ""
-        var fileData = fileInfo && fileInfo.data ? fileInfo.data : ""
-        var fileSize = fileInfo && fileInfo.size ? Number(fileInfo.size) : 0
+        
         model.append({
-            "user": author,
-            "text": text,
+            "user": author || peer,
+            "text": text || "",
+            "timestamp": timestamp || formatTimestamp(""),
             "isPrivate": true,
             "isOutgoing": isOutgoing === true,
             "displayContext": isOutgoing === true ? "You" : author,
-            "status": resolvedStatus,
-            "messageId": resolvedId,
-            "readNotified": isOutgoing === true,
-            "fileName": fileName,
-            "fileMime": fileMime,
-            "fileData": fileData,
-            "fileSize": fileSize,
-            "timestamp": timestamp ? timestamp : Qt.formatDateTime(new Date(), "hh:mm ap")
+            "status": status || "sent",
+            "fileName": filePayload && filePayload.name ? filePayload.name : "",
+            "fileMime": filePayload && filePayload.mime ? filePayload.mime : "",
+            "fileData": filePayload && filePayload.data ? filePayload.data : "",
+            "fileSize": filePayload && filePayload.size ? Number(filePayload.size) : 0
         })
-        var newIndex = model.count - 1
-        if (resolvedId > 0) {
-            var mapping = Object.assign({}, messageIndexById)
-            mapping[resolvedId] = {"peer": peer, "index": newIndex}
-            messageIndexById = mapping
-        }
+        
         var idx = conversationIndex(peer)
         var isActive = idx === conversationTabBar.currentIndex
+        
         if (!isActive && isOutgoing !== true) {
             incrementConversationUnread(peer)
-        } else if (isActive && isOutgoing !== true) {
-            markPrivateMessagesAsRead(peer)
         }
-        // Play notification sound for incoming private messages
+        
         if (isOutgoing !== true) {
-            window.playSoundIfAllowed(privateMessageSound)
-        }
-        var page = conversationPages[peer]
-        if (page && page.scrollToEnd) {
-            page.scrollToEnd(isActive)
+            playSoundIfAllowed(privateMessageSound)
         }
     }
-
-    function openPrivateConversation(peer) {
-        if (!peer || peer === chatClient.username) {
-            return
+    
+    function resetState() {
+        messagesModel.clear()
+        usersModel.clear()
+        totalUserCount = 0
+        publicTypingUsers = []
+        privateTypingStates = ({})
+        userAvatars = ({})
+        
+        // Clear private conversations
+        while (conversationTabsModel.count > 1) {
+            conversationTabsModel.remove(1)
         }
-        ensurePrivateModel(peer)
-        if (conversationIndex(peer) === -1) {
-            conversationTabsModel.append({"key": peer, "title": peer, "isPrivate": true, "hasUnread": false, "unreadCount": 0})
-        }
-        var idx = conversationIndex(peer)
-        if (idx >= 0) {
-            conversationTabBar.currentIndex = idx
-            focusActiveComposer()
-        }
-    }
-
-    function closePrivateConversation(peer) {
-        var idx = conversationIndex(peer)
-        if (idx > 0) {
-            var wasCurrent = conversationTabBar.currentIndex === idx
-            setPrivatePendingFile(peer, null)
-            conversationTabsModel.remove(idx)
-            unregisterConversationPage(peer)
-            var targetIndex = conversationTabBar.currentIndex
-            if (wasCurrent) {
-                targetIndex = Math.max(0, Math.min(idx - 1, conversationTabsModel.count - 1))
-            }
-            if (targetIndex >= conversationTabsModel.count) {
-                targetIndex = Math.max(0, conversationTabsModel.count - 1)
-            }
-            conversationTabBar.currentIndex = targetIndex
-        }
-    }
-
-    function resetPrivateConversations() {
+        
         var keys = Object.keys(privateMessageModels)
         for (var i = 0; i < keys.length; ++i) {
             var key = keys[i]
@@ -491,55 +222,26 @@ ApplicationWindow {
             }
         }
         privateMessageModels = ({})
-        privateDrafts = ({})
-        publicDraft = ""
         conversationPages = ({})
-        privateTypingStates = ({})
-        messageIndexById = ({})
-        publicTypingUsers = []
-        publicTypingText = ""
-        publicPendingFile = null
+        privateDrafts = ({})
         privatePendingFiles = ({})
-        while (conversationTabsModel.count > 1) {
-            conversationTabsModel.remove(conversationTabsModel.count - 1)
-        }
-        setConversationUnread("public", false)
-        conversationTabBar.currentIndex = 0
+        messageIndexById = ({})
     }
-
-    background: Rectangle {
-        id: backgroundLayer
+    
+    // ========== BACKGROUND ==========
+    Rectangle {
         anchors.fill: parent
+        
         gradient: Gradient {
-            GradientStop { position: 0.0; color: palette.gradientTop }
-            GradientStop { position: 1.0; color: palette.gradientBottom }
+            GradientStop { position: 0.0; color: Theme.gradientTop }
+            GradientStop { position: 1.0; color: Theme.gradientBottom }
         }
-
-        property real shimmerOffset: -0.4
-
-        Rectangle {
-            anchors.fill: parent
-            opacity: 0.12
-            gradient: Gradient {
-                GradientStop {
-                    position: Math.max(0.0, Math.min(1.0, backgroundLayer.shimmerOffset - 0.25))
-                    color: "#00000000"
-                }
-                GradientStop {
-                    position: Math.max(0.0, Math.min(1.0, backgroundLayer.shimmerOffset))
-                    color: "#22FFFFFF"
-                }
-                GradientStop {
-                    position: Math.max(0.0, Math.min(1.0, backgroundLayer.shimmerOffset + 0.25))
-                    color: "#00000000"
-                }
-            }
-        }
-
+        
+        // Animated aurora glows
         Item {
             anchors.fill: parent
             opacity: 0.35
-
+            
             Rectangle {
                 id: auroraGlowA
                 width: 420
@@ -547,14 +249,16 @@ ApplicationWindow {
                 radius: width / 2
                 anchors.verticalCenter: parent.verticalCenter
                 x: -260
+                
                 gradient: Gradient {
                     GradientStop { position: 0.0; color: "#40E0C184" }
                     GradientStop { position: 1.0; color: "#00000000" }
                 }
+                
                 SequentialAnimation on x {
                     loops: Animation.Infinite
                     NumberAnimation {
-                        to: backgroundLayer.width - 160
+                        to: parent.width - 160
                         duration: 28000
                         easing.type: Easing.InOutSine
                     }
@@ -565,22 +269,23 @@ ApplicationWindow {
                     }
                 }
             }
-
+            
             Rectangle {
-                id: auroraGlowB
                 width: 360
                 height: 360
                 radius: width / 2
                 anchors.horizontalCenter: parent.horizontalCenter
                 y: -180
+                
                 gradient: Gradient {
                     GradientStop { position: 0.0; color: "#3035A57C" }
                     GradientStop { position: 1.0; color: "#00000000" }
                 }
+                
                 SequentialAnimation on y {
                     loops: Animation.Infinite
                     NumberAnimation {
-                        to: backgroundLayer.height - 140
+                        to: parent.height - 140
                         duration: 24000
                         easing.type: Easing.InOutSine
                     }
@@ -592,31 +297,17 @@ ApplicationWindow {
                 }
             }
         }
-
-        NumberAnimation on shimmerOffset {
-            loops: Animation.Infinite
-            from: -0.4
-            to: 1.4
-            duration: 22000
-            easing.type: Easing.InOutSine
-        }
     }
-
-    Rectangle {
-        anchors.fill: parent
-        radius: 0
-        color: "#14FFFFFF" // Subtle overlay
-    }
-
+    
+    // ========== MAIN CONTENT ==========
     Item {
         id: contentRoot
         anchors.fill: parent
         opacity: 0
         y: 16
-
+        
         ParallelAnimation {
-            id: introAnimation
-            running: false
+            running: true
             PropertyAnimation {
                 target: contentRoot
                 property: "opacity"
@@ -632,2536 +323,265 @@ ApplicationWindow {
                 easing.type: Easing.OutCubic
             }
         }
-
-        Component.onCompleted: introAnimation.start()
-
+        
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 32
             spacing: 26
-
-        // --- HEADER CARD ---
-        Item {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 132
-
-            MultiEffect {
-                anchors.fill: headerCard
-                source: headerCard
-                shadowEnabled: true
-                shadowHorizontalOffset: 0
-                shadowVerticalOffset: 18
-                shadowBlur: 32
-                shadowColor: "#28000000"
-                autoPaddingEnabled: true
-            }
-
-            Rectangle {
-                id: headerCard
-                anchors.fill: parent
-                radius: 28
-                transformOrigin: Item.Center
-                border.color: palette.outline
-                border.width: 1
-                gradient: Gradient {
-                    GradientStop { position: 0.0; color: "#1C283B" } // Using custom gradient
-                    GradientStop { position: 1.0; color: palette.panel }
-                }
-
-                Item {
-                    anchors.fill: parent
-                    anchors.margins: 28
-
-                    GridLayout {
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        columns: 2
-                        columnSpacing: 28
-                        rowSpacing: 0
-
-                        // --- Header Welcome Text ---
-                        ColumnLayout {
-                            Layout.row: 0
-                            Layout.column: 0
-                            Layout.fillWidth: true
-                            Layout.alignment: Qt.AlignVCenter
-                            spacing: 10
-
-                            Text {
-                                text: chatClient.username.length > 0 ? "Welcome back, " + chatClient.username : "Aurora Lounge"
-                                color: palette.textPrimary
-                                font.pixelSize: window.scaleFont(26)
-                                font.bold: true
-                                Layout.alignment: Qt.AlignVCenter
-                            }
-
-                            Text {
-                                text: chatClient.username.length > 0 ? "Share a thought with the lounge—your voice sets tonight's tone." : "Reserve a signature name to slip past the velvet rope."
-                                color: palette.textSecondary
-                                font.pixelSize: window.scaleFont(14)
-                                wrapMode: Text.WordWrap
-                                Layout.fillWidth: true
-                            }
-
-                            RowLayout {
-                                spacing: 12
-
-                                Rectangle {
-                                    Layout.preferredWidth: 160
-                                    Layout.preferredHeight: 32
-                                    radius: 16
-                                    border.width: 0
-                                    color: chatClient.username.length > 0 ? palette.success : palette.accentSoft
-
-                                    Text {
-                                        anchors.centerIn: parent
-                                        text: chatClient.username.length > 0 ? "Enrolled guest" : "Guest access"
-                                        color: chatClient.username.length > 0 ? palette.textPrimary : palette.textSecondary
-                                        font.pixelSize: window.scaleFont(12)
-                                        font.bold: true
-                                    }
-                                }
-
-                                Rectangle {
-                                    Layout.preferredWidth: 160
-                                    Layout.preferredHeight: 32
-                                    radius: 16
-                                    color: "transparent"
-                                    border.color: palette.outline
-                                    border.width: 1
-
-                                    Timer {
-                                        id: clockTimer
-                                        interval: 1000 // Updates once per second
-                                        running: true
-                                        repeat: true
-                                    }
-
-                                    Text {
-                                        anchors.centerIn: parent
-                                        text: {
-                                            clockTimer.triggered() // Depend on the timer
-                                            return Qt.formatDateTime(new Date(), "ddd, MMM d • hh:mm ap")
-                                        }
-                                        color: palette.textSecondary
-                                        font.pixelSize: window.scaleFont(12)
-                                    }
-                                }
-
-                                // Connection Status Indicator
-                                Rectangle {
-                                    Layout.preferredWidth: 140
-                                    Layout.preferredHeight: 32
-                                    radius: 16
-                                    border.width: 1
-                                    border.color: {
-                                        if (chatClient.connectionState === "connected") return palette.success
-                                        if (chatClient.connectionState === "reconnecting") return palette.warning
-                                        return palette.outline
-                                    }
-                                    color: "transparent"
-
-                                    Row {
-                                        anchors.centerIn: parent
-                                        spacing: 8
-
-                                        Rectangle {
-                                            width: 8
-                                            height: 8
-                                            radius: 4
-                                            anchors.verticalCenter: parent.verticalCenter
-                                            color: {
-                                                if (chatClient.connectionState === "connected") return palette.success
-                                                if (chatClient.connectionState === "reconnecting") return palette.warning
-                                                return palette.textSecondary
-                                            }
-
-                                            // Pulse animation for reconnecting
-                                            SequentialAnimation on opacity {
-                                                running: chatClient.connectionState === "reconnecting"
-                                                loops: Animation.Infinite
-                                                PropertyAnimation { to: 0.3; duration: 600 }
-                                                PropertyAnimation { to: 1.0; duration: 600 }
-                                            }
-                                        }
-
-                                        Text {
-                                            text: {
-                                                if (chatClient.connectionState === "connected") return "Connected"
-                                                if (chatClient.connectionState === "reconnecting") return "Reconnecting"
-                                                return "Offline"
-                                            }
-                                            color: palette.textPrimary
-                                            font.pixelSize: window.scaleFont(12)
-                                            font.bold: true
-                                        }
-                                    }
-
-                                    MouseArea {
-                                        id: statusTooltipArea
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                    }
-
-                                    // Tooltip
-                                    Rectangle {
-                                        visible: statusTooltipArea.containsMouse
-                                        color: palette.panel
-                                        border.color: palette.outline
-                                        border.width: 1
-                                        radius: 6
-                                        width: tooltipText.width + 16
-                                        height: tooltipText.height + 12
-                                        x: parent.width / 2 - width / 2
-                                        y: parent.height + 8
-                                        z: 1000
-
-                                        Text {
-                                            id: tooltipText
-                                            anchors.centerIn: parent
-                                            text: {
-                                                if (chatClient.connectionState === "connected")
-                                                    return "Connected to server"
-                                                if (chatClient.connectionState === "reconnecting")
-                                                    return "Attempting to reconnect..."
-                                                return "Not connected to server"
-                                            }
-                                            color: palette.textSecondary
-                                            font.pixelSize: window.scaleFont(11)
-                                        }
-                                    }
-                                }
-
-                                // Sound Toggle Button
-                                ToolButton {
-                                    Layout.preferredWidth: 44
-                                    Layout.preferredHeight: 44
-                                    text: soundsEnabled ? "🔔" : "🔕"
-                                    font.pixelSize: window.scaleFont(20)
-
-                                    background: Rectangle {
-                                        radius: 22
-                                        color: parent.hovered ? palette.canvas : "transparent"
-                                        border.color: parent.hovered ? palette.outline : "transparent"
-                                        border.width: 1
-
-                                        Behavior on color {
-                                            ColorAnimation { duration: 150 }
-                                        }
-                                    }
-
-                                    onClicked: {
-                                        soundsEnabled = !soundsEnabled
-                                    }
-
-                                    MouseArea {
-                                        id: soundToggleTooltipArea
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        onPressed: mouse.accepted = false
-                                    }
-
-                                    // Tooltip
-                                    Rectangle {
-                                        visible: soundToggleTooltipArea.containsMouse
-                                        color: palette.panel
-                                        border.color: palette.outline
-                                        border.width: 1
-                                        radius: 6
-                                        width: soundToggleTooltipText.width + 16
-                                        height: soundToggleTooltipText.height + 12
-                                        x: parent.width / 2 - width / 2
-                                        y: parent.height + 8
-                                        z: 1000
-
-                                        Text {
-                                            id: soundToggleTooltipText
-                                            anchors.centerIn: parent
-                                            text: soundsEnabled ? "Mute notifications" : "Unmute notifications"
-                                            color: palette.textSecondary
-                                            font.pixelSize: window.scaleFont(11)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // --- Header User Input ---
-                        ColumnLayout {
-                            Layout.row: 0
-                            Layout.column: 1
-                            Layout.preferredWidth: 320
-                            Layout.alignment: Qt.AlignVCenter
-                            spacing: 12
-
-                            Rectangle {
-                                // *** BUG FIX: Added Layout.fillWidth ***
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 44
-                                radius: 18
-                                color: window.palette.canvas
-                                border.color: usernameField.activeFocus ? window.palette.accent : window.palette.outline
-                                border.width: 1
-
-                                TextField {
-                                    id: usernameField
-                                    anchors.fill: parent
-                                    leftPadding: 18
-                                    rightPadding: 18
-                                    topPadding: 10
-                                    bottomPadding: 10
-                                    placeholderText: "Choose your lounge signature"
-                                    placeholderTextColor: window.palette.textSecondary
-                                    color: window.palette.textPrimary
-                                    selectionColor: window.palette.accent
-                                    selectedTextColor: window.palette.textPrimary
-                                    verticalAlignment: Text.AlignVCenter
-                                    font.pixelSize: window.scaleFont(14)
-                                    enabled: chatClient.username.length === 0
-                                    cursorDelegate: Rectangle {
-                                        width: 2
-                                        color: window.palette.accent
-                                    }
-                                    background: null
-                                    selectByMouse: true
-                                    onAccepted: registerButton.clicked()
-                                }
-                            }
-
-                            RowLayout {
-                                spacing: 12
-
-                                Button {
-                                    id: registerButton
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: 44
-                                    enabled: chatClient.username.length === 0
-                                    padding: 0
-                                    topPadding: 0
-                                    bottomPadding: 0
-                                    leftPadding: 0
-                                    rightPadding: 0
-                                    transformOrigin: Item.Center
-                                    scale: down ? 0.95 : (hovered ? 1.04 : 1.0)
-                                    Behavior on scale {
-                                        NumberAnimation {
-                                            duration: 160
-                                            easing.type: Easing.OutQuad
-                                        }
-                                    }
-                                    background: Rectangle {
-                                        id: registerBackground
-                                        radius: 20
-                                        border.width: 0
-                                        readonly property color enabledTop: palette.accentBold
-                                        readonly property color enabledBottom: palette.accent
-                                        readonly property color disabledTop: "#3A465D"
-                                        readonly property color disabledBottom: "#2A354A"
-                                        color: registerButton.enabled ? enabledBottom : disabledBottom
-                                        readonly property color topColor: registerButton.enabled ? enabledTop : disabledTop
-                                        readonly property color bottomColor: registerButton.enabled ? enabledBottom : disabledBottom
-                                        gradient: Gradient {
-                                            GradientStop { position: 0.0; color: registerBackground.topColor }
-                                            GradientStop { position: 1.0; color: registerBackground.bottomColor }
-                                        }
-
-                                        Rectangle {
-                                            anchors.fill: parent
-                                            radius: parent.radius
-                                            gradient: Gradient {
-                                                GradientStop { position: 0.0; color: "#40FFFFFF" }
-                                                GradientStop { position: 1.0; color: "#00FFFFFF" }
-                                            }
-                                            opacity: registerButton.down ? 0.5 : ((registerButton.hovered && registerButton.enabled) ? 0.25 : 0.0)
-                                            Behavior on opacity {
-                                                NumberAnimation {
-                                                    duration: 160
-                                                    easing.type: Easing.OutQuad
-                                                }
-                                            }
-                                        }
-                                    }
-                                    contentItem: Text {
-                                        anchors.centerIn: parent
-                                        text: chatClient.username.length > 0 ? "Registered" : "Enter the lounge"
-                                        color: palette.panel
-                                        font.pixelSize: window.scaleFont(14)
-                                        font.bold: true
-                                        horizontalAlignment: Text.AlignHCenter
-                                        verticalAlignment: Text.AlignVCenter
-                                    }
-                                    onClicked: {
-                                        var name = usernameField.text.trim()
-                                        if (name.length > 0) {
-                                            chatClient.register(name)
-                                        }
-                                    }
-                                }
-
-                                Button {
-                                    id: avatarButton
-                                    Layout.preferredWidth: 150
-                                    Layout.preferredHeight: 44
-                                    visible: chatClient.username.length > 0
-                                    enabled: chatClient.username.length > 0
-                                    padding: 0
-                                    topPadding: 0
-                                    bottomPadding: 0
-                                    leftPadding: 0
-                                    rightPadding: 0
-                                    transformOrigin: Item.Center
-                                    scale: down ? 0.96 : (hovered ? 1.02 : 1.0)
-                                    Behavior on scale {
-                                        NumberAnimation {
-                                            duration: 140
-                                            easing.type: Easing.OutQuad
-                                        }
-                                    }
-                                    background: Rectangle {
-                                        radius: 20
-                                        border.width: 0
-                                        gradient: Gradient {
-                                            GradientStop { position: 0.0; color: palette.accent }
-                                            GradientStop { position: 1.0; color: palette.accentBold }
-                                        }
-                                        Rectangle {
-                                            anchors.fill: parent
-                                            radius: parent.radius
-                                            gradient: Gradient {
-                                                GradientStop { position: 0.0; color: "#40FFFFFF" }
-                                                GradientStop { position: 1.0; color: "#00FFFFFF" }
-                                            }
-                                            opacity: avatarButton.down ? 0.45 : (avatarButton.hovered ? 0.2 : 0.0)
-                                            Behavior on opacity {
-                                                NumberAnimation {
-                                                    duration: 140
-                                                    easing.type: Easing.OutQuad
-                                                }
-                                            }
-                                        }
-                                    }
-                                    contentItem: Text {
-                                        anchors.centerIn: parent
-                                        text: "Update avatar"
-                                        color: palette.panel
-                                        font.pixelSize: window.scaleFont(13)
-                                        font.bold: true
-                                        horizontalAlignment: Text.AlignHCenter
-                                        verticalAlignment: Text.AlignVCenter
-                                    }
-                                    onClicked: avatarFileDialog.open()
-                                }
-
-                                ToolButton {
-                                    Layout.preferredWidth: 44
-                                    Layout.preferredHeight: 44
-                                    onClicked: chatClient.disconnect()
-                                    padding: 0
-                                    topPadding: 0
-                                    bottomPadding: 0
-                                    leftPadding: 0
-                                    rightPadding: 0
-                                    background: Rectangle {
-                                        radius: 20
-                                        color: palette.surface
-                                        border.color: palette.outline
-                                    }
-                                    contentItem: Text {
-                                        anchors.fill: parent
-                                        horizontalAlignment: Text.AlignHCenter
-                                        verticalAlignment: Text.AlignVCenter
-                                        text: "\u2715"
-                                        color: palette.textSecondary
-                                        font.pixelSize: window.scaleFont(20)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // --- MAIN CONTENT (CHAT + USER LIST) ---
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            spacing: 22
-
-            // --- CHAT PANEL ---
-            Item {
+            
+            // Header
+            Header {
                 Layout.fillWidth: true
-                Layout.fillHeight: true
-
-                MultiEffect {
-                    anchors.fill: chatCard
-                    source: chatCard
-                    shadowEnabled: true
-                    shadowHorizontalOffset: 0
-                    shadowVerticalOffset: 18
-                    shadowBlur: 36
-                    shadowColor: "#22000000"
-                    autoPaddingEnabled: true
+                Layout.preferredHeight: 132
+                
+                username: chatClient.username
+                connectionState: chatClient.connectionState
+                soundsEnabled: window.soundsEnabled
+                
+                onRegisterClicked: function(username) {
+                    chatClient.register(username)
                 }
-
-                Rectangle {
-                    id: chatCard
-                    anchors.fill: parent
-                    radius: 26
-                    transformOrigin: Item.Center
-                    border.color: palette.outline
-                    border.width: 1
-                    gradient: Gradient {
-                        GradientStop { position: 0.0; color: palette.panel }
-                        GradientStop { position: 1.0; color: palette.surface }
-                    }
-
-                    ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 28
-                        spacing: 16
-
-                        TabBar {
-                            id: conversationTabBar
-                            Layout.fillWidth: true
-                            contentHeight: 38
-                            background: Rectangle {
-                                color: "transparent"
-                                border.width: 0
-                            }
-
-                            onCurrentIndexChanged: {
-                                // Clear unread count when tab is selected
-                                if (currentIndex >= 0 && currentIndex < conversationTabsModel.count) {
-                                    var tab = conversationTabsModel.get(currentIndex)
-                                    window.clearConversationUnread(tab.key)
-                                }
-                            }
-
-                            Repeater {
-                                model: conversationTabsModel
-                                delegate: TabButton {
-                                    required property string key
-                                    required property string title
-                                    required property bool isPrivate
-                                    required property bool hasUnread
-                                    required property int unreadCount
-                                    implicitHeight: conversationTabBar.contentHeight
-                                    padding: 0
-                                    text: title
-                                    checkable: true
-                                    checked: TabBar.index === conversationTabBar.currentIndex
-                                    font.pixelSize: window.scaleFont(12)
-                                    background: Rectangle {
-                                        radius: 16
-                                        color: checked ? window.palette.canvas : window.palette.surface
-                                        border.color: checked ? window.palette.accent : window.palette.outline
-                                        border.width: checked ? 1 : 0
-                                    }
-                                    contentItem: Item {
-                                        anchors.fill: parent
-                                        RowLayout {
-                                            anchors.fill: parent
-                                            anchors.margins: 10
-                                            spacing: 8
-
-                                            Text {
-                                                text: title
-                                                color: window.palette.textPrimary
-                                                font.pixelSize: window.scaleFont(12)
-                                                font.bold: checked
-                                                Layout.alignment: Qt.AlignVCenter
-                                            }
-
-                                            // Unread Badge (replaces the old red dot)
-                                            Rectangle {
-                                                visible: hasUnread && unreadCount > 0
-                                                width: Math.max(20, badgeText.width + 10)
-                                                height: 20
-                                                radius: 10
-                                                color: window.palette.warning
-                                                Layout.alignment: Qt.AlignVCenter
-
-                                                Text {
-                                                    id: badgeText
-                                                    anchors.centerIn: parent
-                                                    text: unreadCount > 99 ? "99+" : unreadCount.toString()
-                                                    color: window.palette.textPrimary
-                                                    font.pixelSize: window.scaleFont(10)
-                                                    font.bold: true
-                                                }
-                                            }
-
-                                            Item {
-                                                Layout.fillWidth: true
-                                                Layout.alignment: Qt.AlignVCenter
-                                            }
-
-                                            Item {
-                                                Layout.preferredWidth: isPrivate ? 20 : 0
-                                                Layout.fillHeight: true
-                                                visible: isPrivate
-
-                                                MouseArea {
-                                                    anchors.fill: parent
-                                                    hoverEnabled: true
-                                                    onClicked: window.closePrivateConversation(key)
-
-                                                    Text {
-                                                        anchors.centerIn: parent
-                                                        text: "\u2715"
-                                                        color: window.palette.textSecondary
-                                                        font.pixelSize: window.scaleFont(12)
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    onClicked: conversationTabBar.currentIndex = TabBar.index
-                                }
-                            }
-                        }
-
-                        StackLayout {
-                            id: conversationStack
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            currentIndex: conversationTabBar.currentIndex
-                            onCurrentIndexChanged: window.onConversationActivated(currentIndex)
-
-                            Repeater {
-                                model: conversationTabsModel
-                                delegate: Loader {
-                                    Layout.fillWidth: true
-                                    Layout.fillHeight: true
-                                    sourceComponent: isPrivate ? privateConversationComponent : publicConversationComponent
-                                    onLoaded: {
-                                        if (sourceComponent === privateConversationComponent) {
-                                            item.setup(key, title, window.ensurePrivateModel(key))
-                                        } else if (sourceComponent === publicConversationComponent) {
-                                            item.setup()
-                                        }
-                                        window.registerConversationPage(key, item)
-                                    }
-                                    onItemChanged: {
-                                        if (!item) {
-                                            window.unregisterConversationPage(key)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                
+                onDisconnectClicked: chatClient.disconnect()
+                
+                onAvatarClicked: {
+                    // Open file dialog for avatar
+                    console.log("Avatar selection not yet implemented")
+                }
+                
+                onSoundToggled: {
+                    window.soundsEnabled = !window.soundsEnabled
                 }
             }
-
-            // --- CONCIERGE (USER LIST) PANEL ---
-            Item {
-                Layout.preferredWidth: 260
-                Layout.fillHeight: true
-
-                MultiEffect {
-                    anchors.fill: conciergeCard
-                    source: conciergeCard
-                    shadowEnabled: true
-                    shadowHorizontalOffset: 0
-                    shadowVerticalOffset: 18
-                    shadowBlur: 32
-                    shadowColor: "#22000000"
-                    autoPaddingEnabled: true
-                }
-
-                Rectangle {
-                    id: conciergeCard
-                    anchors.fill: parent
-                    radius: 26
-                    transformOrigin: Item.Center
-                    border.color: palette.outline
-                    border.width: 1
-                    gradient: Gradient {
-                        GradientStop { position: 0.0; color: palette.surface }
-                        GradientStop { position: 1.0; color: palette.panel }
-                    }
-
-                    ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 24
-                        spacing: 18
-
-                        Text {
-                            text: "Concierge"
-                            color: palette.textPrimary
-                            font.pixelSize: window.scaleFont(17)
-                            font.bold: true
-                        }
-
-                        Text {
-                            text: "Spot a guest, tap to begin a private exchange."
-                            color: palette.textSecondary
-                            font.pixelSize: window.scaleFont(12)
-                            wrapMode: Text.WordWrap
-                            Layout.fillWidth: true
-                        }
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 1
-                            color: palette.outline
-                            opacity: 0.18
-                        }
-
-                        ListView {
-                            id: usersView
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            clip: true
-                            spacing: 12
-                            model: usersModel
-                            delegate: userDelegateComponent
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-
-    // Platform.FileDialog {
-    //     id: avatarFileDialog
-    //     title: "Choose an avatar image"
-    //     nameFilters: ["Images (*.png *.jpg *.jpeg *.gif *.bmp *.webp)"]
-    //     onAccepted: {
-    //         var target = ""
-    //         if (avatarFileDialog.file && avatarFileDialog.file.toString)
-    //             target = avatarFileDialog.file.toString()
-    //         else if (avatarFileDialog.files && avatarFileDialog.files.length > 0)
-    //             target = avatarFileDialog.files[0].toString()
-    //         if (target && target.length > 0)
-    //             chatClient.setAvatar(target)
-    //     }
-    // }
-
-    // --- SOUND EFFECTS ---
-    SoundEffect {
-        id: publicMessageSound
-        source: Qt.resolvedUrl("../assets/notification_message.wav")
-        volume: 0.5
-
-        Component.onCompleted: {
-            if (status === SoundEffect.Error) {
-                console.warn("[QML] Public message sound not loaded")
-            }
-        }
-    }
-
-    SoundEffect {
-        id: privateMessageSound
-        source: Qt.resolvedUrl("../assets/notification_private.wav")
-        volume: 0.6
-
-        Component.onCompleted: {
-            if (status === SoundEffect.Error) {
-                console.warn("[QML] Private message sound not loaded")
-            }
-        }
-    }
-
-    // --- MODELS ---
-    ListModel {
-        id: conversationTabsModel
-        ListElement { key: "public"; title: "Salon feed"; isPrivate: false; hasUnread: false; unreadCount: 0 }
-    }
-    ListModel { id: messagesModel }
-    ListModel { id: usersModel }
-
-    // --- FEEDBACK ANIMATIONS ---
-    ParallelAnimation {
-        id: disconnectAnimation
-        running: false
-
-        SequentialAnimation {
-            PropertyAnimation {
-                target: headerCard
-                property: "scale"
-                to: 0.96
-                duration: 130
-                easing.type: Easing.InOutQuad
-            }
-            PropertyAnimation {
-                target: headerCard
-                property: "scale"
-                to: 1
-                duration: 220
-                easing.type: Easing.OutBack
-            }
-        }
-
-        SequentialAnimation {
-            PropertyAnimation {
-                target: chatCard
-                property: "scale"
-                to: 0.95
-                duration: 130
-                easing.type: Easing.InOutQuad
-            }
-            PropertyAnimation {
-                target: chatCard
-                property: "scale"
-                to: 1
-                duration: 240
-                easing.type: Easing.OutBack
-            }
-        }
-
-        SequentialAnimation {
-            PropertyAnimation {
-                target: conciergeCard
-                property: "scale"
-                to: 0.95
-                duration: 130
-                easing.type: Easing.InOutQuad
-            }
-            PropertyAnimation {
-                target: conciergeCard
-                property: "scale"
-                to: 1
-                duration: 220
-                easing.type: Easing.OutBack
-            }
-        }
-    }
-
-    // --- COMPONENT DEFINITIONS ---
-    Component {
-        id: publicConversationComponent
-
-        ColumnLayout {
-            id: publicConversation
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            spacing: 20
-
-            function setup() {
-                messageField.text = window.publicDraft || ""
-                publicTypingTimer.stop()
-                scrollArea.scrollToEnd(false)
-            }
-
-            function scrollToEnd(animated) {
-                scrollArea.scrollToEnd(animated)
-            }
-
-            function forceComposerFocus() {
-                messageField.forceActiveFocus()
-            }
-
-            Timer {
-                id: publicTypingTimer
-                interval: 2000
-                repeat: false
-                onTriggered: chatClient.indicatePublicTyping(false)
-            }
-
-            Menu {
-                id: publicEmojiMenu
-                Repeater {
-                    model: window.emojiOptions
-                    delegate: MenuItem {
-                        text: modelData
-                        onTriggered: {
-                            window.insertEmojiIntoField(messageField, modelData)
-                            messageField.forceActiveFocus()
-                        }
-                    }
-                }
-            }
-
-            Platform.FileDialog {
-                id: publicFileDialog
-                title: "Select a file to share"
-                onAccepted: {
-                    var target = ""
-                    if (publicFileDialog.file && publicFileDialog.file.toString) {
-                        target = publicFileDialog.file.toString()
-                    } else if (publicFileDialog.file) {
-                        target = String(publicFileDialog.file)
-                    } else if (publicFileDialog.files && publicFileDialog.files.length > 0) {
-                        var candidate = publicFileDialog.files[0]
-                        target = candidate && candidate.toString ? candidate.toString() : String(candidate)
-                    }
-                    if (target.length > 0) {
-                        var meta = chatClient.inspectFile(target)
-                        if (meta && meta.path) {
-                            window.publicPendingFile = meta
-                            messageField.forceActiveFocus()
-                        }
-                    }
-                }
-            }
-
+            
+            // Main content row
             RowLayout {
                 Layout.fillWidth: true
-                spacing: 12
-
-                Text {
-                    text: "Salon feed"
-                    color: palette.textPrimary
-                    font.pixelSize: window.scaleFont(18)
-                    font.bold: true
-                }
-
-                Rectangle {
-                    Layout.preferredWidth: 6
-                    Layout.preferredHeight: 6
-                    radius: 3
-                    color: palette.accent
-                    Layout.alignment: Qt.AlignVCenter
-                }
-
-                Text {
-                    text: window.totalUserCount > 0 ? window.totalUserCount + " guests mingling" : "Awaiting first arrival"
-                    color: palette.textSecondary
-                    font.pixelSize: window.scaleFont(12)
-                    Layout.alignment: Qt.AlignVCenter
-                }
-            }
-
-            Flickable {
-                id: scrollArea
-                Layout.fillWidth: true
                 Layout.fillHeight: true
-                clip: true
-                property bool autoStickToBottom: true
-                contentWidth: chatColumn.width
-                contentHeight: chatColumn.height
-                boundsBehavior: Flickable.DragAndOvershootBounds
-
-                Component.onCompleted: scrollToEnd(false)
-
-                Column {
-                    id: chatColumn
-                    width: scrollArea.width
-                    spacing: 20
-
-                    Repeater {
-                        model: messagesModel
-                        delegate: messageDelegateComponent
-                    }
-
-                    Item {
-                        width: parent.width
-                        height: 12
-                    }
-                }
-
-                ScrollIndicator.vertical: ScrollIndicator {
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.bottom: parent.bottom
-                    contentItem: Rectangle {
-                        radius: 2
-                        color: palette.accent
-                    }
-                }
-
-                onContentHeightChanged: scrollToEnd(autoStickToBottom)
-                onContentYChanged: {
-                    if ((moving || dragging) && !atYEnd) {
-                        autoStickToBottom = false
-                    } else if (!moving && !dragging && atYEnd) {
-                        autoStickToBottom = true
-                    }
-                }
-                onMovementStarted: {
-                    if (!atYEnd) {
-                        autoStickToBottom = false
-                    }
-                }
-                onMovementEnded: {
-                    if (atYEnd) {
-                        autoStickToBottom = true
-                    }
-                }
-                onDraggingChanged: {
-                    if (dragging && !atYEnd) {
-                        autoStickToBottom = false
-                    } else if (!dragging && atYEnd) {
-                        autoStickToBottom = true
-                    }
-                }
-
-                NumberAnimation {
-                    id: scrollAnimation
-                    target: scrollArea
-                    property: "contentY"
-                    duration: 220
-                    easing.type: Easing.InOutQuad
-                }
-
-                function scrollToEnd(animated) {
-                    var target = Math.max(0, contentHeight - height)
-                    if (Math.abs(contentY - target) < 0.5) {
-                        return
-                    }
-                    if (animated) {
-                        if (!autoStickToBottom) {
-                            return
-                        }
-                        scrollAnimation.stop()
-                        scrollAnimation.from = contentY
-                        scrollAnimation.to = target
-                        scrollAnimation.restart()
-                    } else {
-                        scrollAnimation.stop()
-                        contentY = target
-                    }
-                }
-            }
-
-            Text {
-                Layout.fillWidth: true
-                text: window.publicTypingText
-                color: palette.textSecondary
-                font.pixelSize: window.scaleFont(12)
-                visible: text && text.length > 0
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                radius: 22
-                color: window.palette.surface
-                border.color: window.palette.outline
-                border.width: 1
-                implicitHeight: composerContent.implicitHeight + 36
-
-                ColumnLayout {
-                    id: composerContent
-                    anchors.fill: parent
-                    anchors.margins: 18
-                    spacing: 12
-
-                    RowLayout {
-                        id: publicComposerRow
-                        Layout.fillWidth: true
-                        spacing: 16
-
-                        Rectangle {
-                            id: messageFieldFrame
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 48
-                            radius: 16
-                            color: window.palette.canvas
-                            border.color: messageField.activeFocus ? window.palette.accent : window.palette.outline
-                            border.width: 1
-                            property real rippleProgress: 0
-                            Behavior on border.color {
-                                ColorAnimation {
-                                    duration: 180
-                                    easing.type: Easing.OutQuad
-                                }
-                            }
-
-                            Rectangle {
-                                id: rippleOverlay
-                                anchors.fill: parent
-                                radius: parent.radius
-                                color: "transparent"
-                                border.width: 0
-                                opacity: messageField.activeFocus ? 0.35 : 0.0
-                                visible: opacity > 0
-                                gradient: Gradient {
-                                    GradientStop {
-                                        position: Math.max(0.0, messageFieldFrame.rippleProgress - 0.2)
-                                        color: "#00FFFFFF"
-                                    }
-                                    GradientStop {
-                                        position: Math.max(0.0, Math.min(1.0, messageFieldFrame.rippleProgress))
-                                        color: window.palette.accent
-                                    }
-                                    GradientStop {
-                                        position: Math.min(1.0, messageFieldFrame.rippleProgress + 0.2)
-                                        color: "#00FFFFFF"
-                                    }
-                                }
-                                Behavior on opacity {
-                                    NumberAnimation {
-                                        duration: 220
-                                        easing.type: Easing.OutQuad
-                                    }
-                                }
-                            }
-
-                            NumberAnimation {
-                                id: rippleAnimator
-                                target: messageFieldFrame
-                                property: "rippleProgress"
-                                from: 0
-                                to: 1
-                                duration: 520
-                                easing.type: Easing.OutQuad
-                            }
-
-                            TextField {
-                                id: messageField
-                                anchors.fill: parent
-                                leftPadding: 18
-                                rightPadding: 18
-                                topPadding: 12
-                                bottomPadding: 12
-                                placeholderText: "Share something with the lounge"
-                                placeholderTextColor: window.palette.textSecondary
-                                color: window.palette.textPrimary
-                                selectionColor: window.palette.accent
-                                selectedTextColor: window.palette.textPrimary
-                                verticalAlignment: Text.AlignVCenter
-                                font.pixelSize: window.scaleFont(14)
-                                wrapMode: Text.WordWrap
-                                cursorDelegate: Rectangle {
-                                    width: 2
-                                    color: window.palette.accent
-                                }
-                                background: null
-                                selectByMouse: true
-                                onAccepted: sendButton.clicked()
-                                onActiveFocusChanged: {
-                                    if (activeFocus) {
-                                        messageFieldFrame.rippleProgress = 0
-                                        rippleAnimator.restart()
-                                    } else {
-                                        rippleAnimator.stop()
-                                        messageFieldFrame.rippleProgress = 0
-                                        chatClient.indicatePublicTyping(false)
-                                        publicTypingTimer.stop()
-                                    }
-                                }
-                                onTextChanged: {
-                                    window.publicDraft = text
-                                    if (text.length > 0) {
-                                        chatClient.indicatePublicTyping(true)
-                                        publicTypingTimer.restart()
-                                    } else {
-                                        chatClient.indicatePublicTyping(false)
-                                        publicTypingTimer.stop()
-                                    }
-                                }
-                            }
-                        }
-
-                        ToolButton {
-                            id: publicEmojiButton
-                            Layout.preferredWidth: 48
-                            Layout.preferredHeight: 48
-                            padding: 0
-                            focusPolicy: Qt.NoFocus
-                            property color baseColor: window.palette.canvas
-                            property color hoverColor: window.palette.surface
-                            property color activeColor: window.palette.accentSoft
-                            property color borderColor: window.palette.outline
-                            readonly property url iconSource: Qt.resolvedUrl("../assets/emoji_icon.svg")
-                            onClicked: {
-                                var pos = mapToItem(null, 0, height)
-                                publicEmojiMenu.x = pos.x
-                                publicEmojiMenu.y = pos.y
-                                publicEmojiMenu.open()
-                            }
-                            background: Rectangle {
-                                radius: 18
-                                color: publicEmojiButton.down ? publicEmojiButton.activeColor : (publicEmojiButton.hovered ? publicEmojiButton.hoverColor : publicEmojiButton.baseColor)
-                                border.width: 1
-                                border.color: publicEmojiButton.down || publicEmojiButton.hovered ? window.palette.accent : publicEmojiButton.borderColor
-                                Behavior on color {
-                                    ColorAnimation { duration: 140; easing.type: Easing.OutQuad }
-                                }
-                                Behavior on border.color {
-                                    ColorAnimation { duration: 140; easing.type: Easing.OutQuad }
-                                }
-                            }
-                            contentItem: Image {
-                                anchors.centerIn: parent
-                                width: window.scaleFont(24)
-                                height: width
-                                source: publicEmojiButton.iconSource
-                                fillMode: Image.PreserveAspectFit
-                                smooth: true
-                            }
-                        }
-
-                        ToolButton {
-                            id: publicFileButton
-                            Layout.preferredWidth: 48
-                            Layout.preferredHeight: 48
-                            padding: 0
-                            focusPolicy: Qt.NoFocus
-                            property color baseColor: window.palette.canvas
-                            property color hoverColor: window.palette.surface
-                            property color activeColor: window.palette.accentSoft
-                            property color borderColor: window.palette.outline
-                            readonly property url iconSource: Qt.resolvedUrl("../assets/file_icon.svg")
-                            onClicked: publicFileDialog.open()
-                            background: Rectangle {
-                                radius: 18
-                                color: publicFileButton.down ? publicFileButton.activeColor : (publicFileButton.hovered ? publicFileButton.hoverColor : publicFileButton.baseColor)
-                                border.width: 1
-                                border.color: publicFileButton.down || publicFileButton.hovered ? window.palette.accent : publicFileButton.borderColor
-                                Behavior on color {
-                                    ColorAnimation { duration: 140; easing.type: Easing.OutQuad }
-                                }
-                                Behavior on border.color {
-                                    ColorAnimation { duration: 140; easing.type: Easing.OutQuad }
-                                }
-                            }
-                            contentItem: Image {
-                                anchors.centerIn: parent
-                                width: window.scaleFont(22)
-                                height: width
-                                source: publicFileButton.iconSource
-                                fillMode: Image.PreserveAspectFit
-                                smooth: true
-                            }
-                        }
-
-                        Button {
-                            id: sendButton
-                            Layout.preferredWidth: 124
-                            Layout.preferredHeight: 48
-                            padding: 0
-                            topPadding: 0
-                            bottomPadding: 0
-                            leftPadding: 0
-                            rightPadding: 0
-                            transformOrigin: Item.Center
-                            scale: down ? 0.95 : (hovered ? 1.05 : 1.0)
-                            Behavior on scale {
-                                NumberAnimation {
-                                    duration: 160
-                                    easing.type: Easing.OutQuad
-                                }
-                            }
-                            background: Rectangle {
-                                id: sendBackground
-                                radius: 22
-                                border.width: 0
-                                gradient: Gradient {
-                                    GradientStop { position: 0.0; color: palette.accentBold }
-                                    GradientStop { position: 1.0; color: palette.accent }
-                                }
-                                Rectangle {
-                                    anchors.fill: parent
-                                    radius: parent.radius
-                                    gradient: Gradient {
-                                        GradientStop { position: 0.0; color: "#40FFFFFF" }
-                                        GradientStop { position: 1.0; color: "#00FFFFFF" }
-                                    }
-                                    opacity: sendButton.down ? 0.55 : (sendButton.hovered ? 0.28 : 0.0)
-                                    Behavior on opacity {
-                                        NumberAnimation {
-                                            duration: 160
-                                            easing.type: Easing.OutQuad
-                                        }
-                                    }
-                                }
-                            }
-                            contentItem: Text {
-                                anchors.centerIn: parent
-                                text: "Send"
-                                color: palette.panel
-                                font.pixelSize: window.scaleFont(15)
-                                font.bold: true
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                            onClicked: {
-                                var text = messageField.text.trim()
-                                var pendingPath = window.publicPendingFile && window.publicPendingFile.path ? window.publicPendingFile.path : ""
-                                if (text.length === 0 && pendingPath.length === 0) {
-                                    chatClient.sendMessageWithAttachment("", "")
-                                    return
-                                }
-                                chatClient.sendMessageWithAttachment(text, pendingPath)
-                                if (text.length > 0 || pendingPath.length > 0) {
-                                    messageField.text = ""
-                                    window.publicDraft = ""
-                                    window.publicPendingFile = null
-                                    chatClient.indicatePublicTyping(false)
-                                    publicTypingTimer.stop()
-                                    scrollArea.scrollToEnd(true)
-                                }
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        id: publicAttachmentPreview
-                        Layout.fillWidth: true
-                        visible: window.publicPendingFile !== null
-                        radius: 14
-                        color: window.palette.canvas
-                        border.color: window.palette.outline
-                        border.width: 1
-                        implicitHeight: publicAttachmentRow.implicitHeight + 16
-
-                        RowLayout {
-                            id: publicAttachmentRow
-                            anchors.fill: parent
-                            anchors.margins: 12
-                            spacing: 12
-
-                            Text {
-                                text: "📎"
-                                font.pixelSize: window.scaleFont(20)
-                                color: window.palette.accent
-                                font.family: window.emojiFontFamily
-                            }
-
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 2
-
-                                Text {
-                                    text: window.publicPendingFile ? window.publicPendingFile.name : ""
-                                    color: window.palette.textPrimary
-                                    font.pixelSize: window.scaleFont(13)
-                                    elide: Text.ElideRight
-                                    Layout.fillWidth: true
-                                }
-
-                                Text {
-                                    text: window.publicPendingFile ? window.formatFileSize(window.publicPendingFile.size) : ""
-                                    color: window.palette.textSecondary
-                                    font.pixelSize: window.scaleFont(11)
-                                    Layout.fillWidth: true
-                                }
-                            }
-
-                            ToolButton {
-                                Layout.preferredWidth: 28
-                                Layout.preferredHeight: 28
-                                padding: 0
-                                text: "\u2715"
-                                onClicked: {
-                                    window.publicPendingFile = null
-                                    messageField.forceActiveFocus()
-                                }
-                                background: Rectangle {
-                                    radius: 12
-                                    color: window.palette.surface
-                                    border.color: window.palette.outline
-                                    border.width: 1
-                                }
-                                contentItem: Text {
-                                    anchors.centerIn: parent
-                                    text: parent.text
-                                    color: window.palette.textSecondary
-                                    font.pixelSize: window.scaleFont(12)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Component {
-        id: privateConversationComponent
-
-        ColumnLayout {
-            id: privateConversation
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            spacing: 20
-            property string peerKey: ""
-            property string displayName: ""
-            property var conversationModel: null
-            property var pendingFile: null
-
-            function setup(key, title, model) {
-                peerKey = key || ""
-                displayName = title || key || ""
-                conversationModel = model
-                messageField.text = window.privateDrafts[peerKey] || ""
-                pendingFile = window.getPrivatePendingFile(peerKey)
-                privateTypingTimer.stop()
-                scrollArea.scrollToEnd(false)
-            }
-
-            function scrollToEnd(animated) {
-                scrollArea.scrollToEnd(animated)
-            }
-
-            function forceComposerFocus() {
-                messageField.forceActiveFocus()
-            }
-
-            Timer {
-                id: privateTypingTimer
-                interval: 2000
-                repeat: false
-                onTriggered: {
-                    if (peerKey.length > 0) {
-                        chatClient.indicatePrivateTyping(peerKey, false)
-                    }
-                }
-            }
-
-            Menu {
-                id: privateEmojiMenu
-                Repeater {
-                    model: window.emojiOptions
-                    delegate: MenuItem {
-                        text: modelData
-                        onTriggered: {
-                            window.insertEmojiIntoField(messageField, modelData)
-                            messageField.forceActiveFocus()
-                        }
-                    }
-                }
-            }
-
-            Platform.FileDialog {
-                id: privateFileDialog
-                title: "Select a file to whisper"
-                onAccepted: {
-                    if (peerKey.length === 0) {
-                        return
-                    }
-                    var target = ""
-                    if (privateFileDialog.file && privateFileDialog.file.toString) {
-                        target = privateFileDialog.file.toString()
-                    } else if (privateFileDialog.file) {
-                        target = String(privateFileDialog.file)
-                    } else if (privateFileDialog.files && privateFileDialog.files.length > 0) {
-                        var candidate = privateFileDialog.files[0]
-                        target = candidate && candidate.toString ? candidate.toString() : String(candidate)
-                    }
-                    if (target.length > 0) {
-                        var meta = chatClient.inspectFile(target)
-                        if (meta && meta.path) {
-                            pendingFile = meta
-                            window.setPrivatePendingFile(peerKey, meta)
-                            messageField.forceActiveFocus()
-                            chatClient.indicatePrivateTyping(peerKey, false)
-                            privateTypingTimer.stop()
-                        }
-                    }
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 12
-
-                Text {
-                    text: displayName.length > 0 ? "Private line with " + displayName : "Private line"
-                    color: palette.textPrimary
-                    font.pixelSize: window.scaleFont(18)
-                    font.bold: true
-                }
-
-                Rectangle {
-                    Layout.preferredWidth: 6
-                    Layout.preferredHeight: 6
-                    radius: 3
-                    color: palette.accent
-                    Layout.alignment: Qt.AlignVCenter
-                }
-
-                Text {
-                    text: "Only you and " + (displayName.length > 0 ? displayName : "this guest") + " can see this thread"
-                    color: palette.textSecondary
-                    font.pixelSize: window.scaleFont(12)
-                    Layout.alignment: Qt.AlignVCenter
-                    wrapMode: Text.WordWrap
-                }
-            }
-
-            Text {
-                Layout.fillWidth: true
-                text: peerKey.length > 0 && window.privateTypingStates[peerKey] ? peerKey + " is typing..." : ""
-                color: palette.textSecondary
-                font.pixelSize: window.scaleFont(12)
-                visible: text.length > 0
-            }
-
-            Flickable {
-                id: scrollArea
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                property bool autoStickToBottom: true
-                contentWidth: chatColumn.width
-                contentHeight: chatColumn.height
-                boundsBehavior: Flickable.DragAndOvershootBounds
-
-                Component.onCompleted: scrollToEnd(false)
-
-                Column {
-                    id: chatColumn
-                    width: scrollArea.width
-                    spacing: 20
-
-                    Repeater {
-                        model: privateConversation.conversationModel ? privateConversation.conversationModel : 0
-                        delegate: messageDelegateComponent
-                    }
-
-                    Item {
-                        width: parent.width
-                        height: 12
-                    }
-                }
-
-                ScrollIndicator.vertical: ScrollIndicator {
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.bottom: parent.bottom
-                    contentItem: Rectangle {
-                        radius: 2
-                        color: palette.accent
-                    }
-                }
-
-                onContentHeightChanged: scrollToEnd(autoStickToBottom)
-                onContentYChanged: {
-                    if ((moving || dragging) && !atYEnd) {
-                        autoStickToBottom = false
-                    } else if (!moving && !dragging && atYEnd) {
-                        autoStickToBottom = true
-                    }
-                }
-                onMovementStarted: {
-                    if (!atYEnd) {
-                        autoStickToBottom = false
-                    }
-                }
-                onMovementEnded: {
-                    if (atYEnd) {
-                        autoStickToBottom = true
-                    }
-                }
-                onDraggingChanged: {
-                    if (dragging && !atYEnd) {
-                        autoStickToBottom = false
-                    } else if (!dragging && atYEnd) {
-                        autoStickToBottom = true
-                    }
-                }
-
-                NumberAnimation {
-                    id: privateScrollAnimation
-                    target: scrollArea
-                    property: "contentY"
-                    duration: 220
-                    easing.type: Easing.InOutQuad
-                }
-
-                function scrollToEnd(animated) {
-                    var target = Math.max(0, contentHeight - height)
-                    if (Math.abs(contentY - target) < 0.5) {
-                        return
-                    }
-                    if (animated) {
-                        if (!autoStickToBottom) {
-                            return
-                        }
-                        privateScrollAnimation.stop()
-                        privateScrollAnimation.from = contentY
-                        privateScrollAnimation.to = target
-                        privateScrollAnimation.restart()
-                    } else {
-                        privateScrollAnimation.stop()
-                        contentY = target
-                    }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                radius: 22
-                color: window.palette.surface
-                border.color: window.palette.outline
-                border.width: 1
-                implicitHeight: privateComposerContent.implicitHeight + 36
-
-                ColumnLayout {
-                    id: privateComposerContent
-                    anchors.fill: parent
-                    anchors.margins: 18
-                    spacing: 12
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 16
-
-                        Rectangle {
-                            id: privateMessageFieldFrame
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 48
-                            radius: 16
-                            color: window.palette.canvas
-                            border.color: messageField.activeFocus ? window.palette.accent : window.palette.outline
-                            border.width: 1
-                            property real rippleProgress: 0
-                            Behavior on border.color {
-                                ColorAnimation {
-                                    duration: 180
-                                    easing.type: Easing.OutQuad
-                                }
-                            }
-
-                            Rectangle {
-                                anchors.fill: parent
-                                radius: parent.radius
-                                color: "transparent"
-                                border.width: 0
-                                opacity: messageField.activeFocus ? 0.35 : 0.0
-                                visible: opacity > 0
-                                gradient: Gradient {
-                                    GradientStop {
-                                        position: Math.max(0.0, privateMessageFieldFrame.rippleProgress - 0.2)
-                                        color: "#00FFFFFF"
-                                    }
-                                    GradientStop {
-                                        position: Math.max(0.0, Math.min(1.0, privateMessageFieldFrame.rippleProgress))
-                                        color: window.palette.accent
-                                    }
-                                    GradientStop {
-                                        position: Math.min(1.0, privateMessageFieldFrame.rippleProgress + 0.2)
-                                        color: "#00FFFFFF"
-                                    }
-                                }
-                                Behavior on opacity {
-                                    NumberAnimation {
-                                        duration: 220
-                                        easing.type: Easing.OutQuad
-                                    }
-                                }
-                            }
-
-                            NumberAnimation {
-                                id: privateRippleAnimator
-                                target: privateMessageFieldFrame
-                                property: "rippleProgress"
-                                from: 0
-                                to: 1
-                                duration: 520
-                                easing.type: Easing.OutQuad
-                            }
-
-                            TextField {
-                                id: messageField
-                                anchors.fill: parent
-                                leftPadding: 18
-                                rightPadding: 18
-                                topPadding: 12
-                                bottomPadding: 12
-                                placeholderText: displayName.length > 0 ? "Whisper to " + displayName : "Whisper to this guest"
-                                placeholderTextColor: window.palette.textSecondary
-                                color: window.palette.textPrimary
-                                selectionColor: window.palette.accent
-                                selectedTextColor: window.palette.textPrimary
-                                verticalAlignment: Text.AlignVCenter
-                                font.pixelSize: window.scaleFont(14)
-                                wrapMode: Text.WordWrap
-                                cursorDelegate: Rectangle {
-                                    width: 2
-                                    color: window.palette.accent
-                                }
-                                background: null
-                                selectByMouse: true
-                                onAccepted: sendButton.clicked()
-                                onActiveFocusChanged: {
-                                    if (activeFocus) {
-                                        privateMessageFieldFrame.rippleProgress = 0
-                                        privateRippleAnimator.restart()
-                                    } else {
-                                        privateRippleAnimator.stop()
-                                        privateMessageFieldFrame.rippleProgress = 0
-                                        if (peerKey.length > 0) {
-                                            chatClient.indicatePrivateTyping(peerKey, false)
-                                            privateTypingTimer.stop()
-                                        }
-                                    }
-                                }
-                                onTextChanged: {
-                                    if (peerKey.length > 0) {
-                                        window.privateDrafts[peerKey] = text
-                                        if (text.length > 0) {
-                                            chatClient.indicatePrivateTyping(peerKey, true)
-                                            privateTypingTimer.restart()
-                                        } else {
-                                            chatClient.indicatePrivateTyping(peerKey, false)
-                                            privateTypingTimer.stop()
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        ToolButton {
-                            id: privateEmojiButton
-                            Layout.preferredWidth: 48
-                            Layout.preferredHeight: 48
-                            padding: 0
-                            focusPolicy: Qt.NoFocus
-                            property color baseColor: window.palette.canvas
-                            property color hoverColor: window.palette.surface
-                            property color activeColor: window.palette.accentSoft
-                            property color borderColor: window.palette.outline
-                            readonly property url iconSource: Qt.resolvedUrl("../assets/emoji_icon.svg")
-                            onClicked: {
-                                var pos = mapToItem(null, 0, height)
-                                privateEmojiMenu.x = pos.x
-                                privateEmojiMenu.y = pos.y
-                                privateEmojiMenu.open()
-                            }
-                            background: Rectangle {
-                                radius: 18
-                                color: privateEmojiButton.down ? privateEmojiButton.activeColor : (privateEmojiButton.hovered ? privateEmojiButton.hoverColor : privateEmojiButton.baseColor)
-                                border.width: 1
-                                border.color: privateEmojiButton.down || privateEmojiButton.hovered ? window.palette.accent : privateEmojiButton.borderColor
-                                Behavior on color {
-                                    ColorAnimation { duration: 140; easing.type: Easing.OutQuad }
-                                }
-                                Behavior on border.color {
-                                    ColorAnimation { duration: 140; easing.type: Easing.OutQuad }
-                                }
-                            }
-                            contentItem: Image {
-                                anchors.centerIn: parent
-                                width: window.scaleFont(24)
-                                height: width
-                                source: privateEmojiButton.iconSource
-                                fillMode: Image.PreserveAspectFit
-                                smooth: true
-                            }
-                        }
-
-                        ToolButton {
-                            id: privateFileButton
-                            Layout.preferredWidth: 48
-                            Layout.preferredHeight: 48
-                            padding: 0
-                            focusPolicy: Qt.NoFocus
-                            property color baseColor: window.palette.canvas
-                            property color hoverColor: window.palette.surface
-                            property color activeColor: window.palette.accentSoft
-                            property color borderColor: window.palette.outline
-                            readonly property url iconSource: Qt.resolvedUrl("../assets/file_icon.svg")
-                            enabled: peerKey.length > 0
-                            onClicked: privateFileDialog.open()
-                            background: Rectangle {
-                                radius: 18
-                                color: privateFileButton.down ? privateFileButton.activeColor : (privateFileButton.hovered ? privateFileButton.hoverColor : privateFileButton.baseColor)
-                                border.width: 1
-                                border.color: privateFileButton.down || privateFileButton.hovered ? window.palette.accent : privateFileButton.borderColor
-                                Behavior on color {
-                                    ColorAnimation { duration: 140; easing.type: Easing.OutQuad }
-                                }
-                                Behavior on border.color {
-                                    ColorAnimation { duration: 140; easing.type: Easing.OutQuad }
-                                }
-                            }
-                            contentItem: Image {
-                                anchors.centerIn: parent
-                                width: window.scaleFont(22)
-                                height: width
-                                source: privateFileButton.iconSource
-                                fillMode: Image.PreserveAspectFit
-                                smooth: true
-                            }
-                        }
-
-                        Button {
-                            id: sendButton
-                            Layout.preferredWidth: 124
-                            Layout.preferredHeight: 48
-                            padding: 0
-                            topPadding: 0
-                            bottomPadding: 0
-                            leftPadding: 0
-                            rightPadding: 0
-                            transformOrigin: Item.Center
-                            scale: down ? 0.95 : (hovered ? 1.05 : 1.0)
-                            Behavior on scale {
-                                NumberAnimation {
-                                    duration: 160
-                                    easing.type: Easing.OutQuad
-                                }
-                            }
-                            background: Rectangle {
-                                radius: 22
-                                border.width: 0
-                                gradient: Gradient {
-                                    GradientStop { position: 0.0; color: palette.accentBold }
-                                    GradientStop { position: 1.0; color: palette.accent }
-                                }
-                                Rectangle {
-                                    anchors.fill: parent
-                                    radius: parent.radius
-                                    gradient: Gradient {
-                                        GradientStop { position: 0.0; color: "#40FFFFFF" }
-                                        GradientStop { position: 1.0; color: "#00FFFFFF" }
-                                    }
-                                    opacity: sendButton.down ? 0.55 : (sendButton.hovered ? 0.28 : 0.0)
-                                    Behavior on opacity {
-                                        NumberAnimation {
-                                            duration: 160
-                                            easing.type: Easing.OutQuad
-                                        }
-                                    }
-                                }
-                            }
-                            contentItem: Text {
-                                anchors.centerIn: parent
-                                text: "Send"
-                                color: palette.panel
-                                font.pixelSize: window.scaleFont(15)
-                                font.bold: true
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                            onClicked: {
-                                if (peerKey.length === 0) {
-                                    return
-                                }
-                                var text = messageField.text.trim()
-                                var pendingPath = pendingFile && pendingFile.path ? pendingFile.path : ""
-                                if (text.length === 0 && pendingPath.length === 0) {
-                                    chatClient.sendPrivateMessageWithAttachment(peerKey, "", "")
-                                    return
-                                }
-                                chatClient.sendPrivateMessageWithAttachment(peerKey, text, pendingPath)
-                                if (text.length > 0 || pendingPath.length > 0) {
-                                    messageField.text = ""
-                                    window.privateDrafts[peerKey] = ""
-                                    pendingFile = null
-                                    window.setPrivatePendingFile(peerKey, null)
-                                    window.setConversationUnread(peerKey, false)
-                                    chatClient.indicatePrivateTyping(peerKey, false)
-                                    privateTypingTimer.stop()
-                                    scrollArea.scrollToEnd(true)
-                                }
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        visible: pendingFile !== null
-                        radius: 14
-                        color: window.palette.canvas
-                        border.color: window.palette.outline
-                        border.width: 1
-                        implicitHeight: privateAttachmentRow.implicitHeight + 16
-
-                        RowLayout {
-                            id: privateAttachmentRow
-                            anchors.fill: parent
-                            anchors.margins: 12
-                            spacing: 12
-
-                            Text {
-                                text: "📎"
-                                font.pixelSize: window.scaleFont(20)
-                                color: window.palette.accent
-                                font.family: window.emojiFontFamily
-                            }
-
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 2
-
-                                Text {
-                                    text: pendingFile ? pendingFile.name : ""
-                                    color: window.palette.textPrimary
-                                    font.pixelSize: window.scaleFont(13)
-                                    elide: Text.ElideRight
-                                    Layout.fillWidth: true
-                                }
-
-                                Text {
-                                    text: pendingFile ? window.formatFileSize(pendingFile.size) : ""
-                                    color: window.palette.textSecondary
-                                    font.pixelSize: window.scaleFont(11)
-                                    Layout.fillWidth: true
-                                }
-                            }
-
-                            ToolButton {
-                                Layout.preferredWidth: 28
-                                Layout.preferredHeight: 28
-                                padding: 0
-                                text: "\u2715"
-                                onClicked: {
-                                    pendingFile = null
-                                    window.setPrivatePendingFile(peerKey, null)
-                                    messageField.forceActiveFocus()
-                                }
-                                background: Rectangle {
-                                    radius: 12
-                                    color: window.palette.surface
-                                    border.color: window.palette.outline
-                                    border.width: 1
-                                }
-                                contentItem: Text {
-                                    anchors.centerIn: parent
-                                    text: parent.text
-                                    color: window.palette.textSecondary
-                                    font.pixelSize: window.scaleFont(12)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Component {
-        id: messageDelegateComponent
-
-        Column {
-            id: messageContainer
-            width: parent ? parent.width : 0
-            spacing: 6
-            property bool isFirst: index === 0
-            property bool isSystem: model.user === "System"
-            property bool isOwnMessage: model.user === chatClient.username
-            opacity: 0
-            scale: 0.97
-            transformOrigin: Item.TopLeft
-
-            Component.onCompleted: entryAnimation.start()
-
-            ParallelAnimation {
-                id: entryAnimation
-                running: false
-                PropertyAnimation {
-                    target: messageContainer
-                    property: "opacity"
-                    to: 1
-                    duration: 220
-                    easing.type: Easing.OutQuad
-                }
-                PropertyAnimation {
-                    target: messageContainer
-                    property: "scale"
-                    to: 1
-                    duration: 220
-                    easing.type: Easing.OutBack
-                }
-            }
-
-            Rectangle {
-                width: parent.width
-                height: isFirst ? 0 : 1
-                color: palette.outline
-                opacity: 0.18
-            }
-
-            Row {
-                width: parent.width
-                spacing: 12
-                layoutDirection: messageContainer.isOwnMessage ? Qt.RightToLeft : Qt.LeftToRight
-
+                spacing: 22
+                
+                // Chat panel
                 Item {
-                    width: 40
-                    height: 40
-                    property string avatarSource: window.avatarSourceFor(model.user)
-
-                    Rectangle {
-                        anchors.fill: parent
-                        radius: width / 2
-                        visible: parent.avatarSource && parent.avatarSource.length > 0
-                        color: "transparent"
-                        clip: true
-
-                        Image {
-                            anchors.fill: parent
-                            source: parent.parent.avatarSource
-                            fillMode: Image.PreserveAspectCrop
-                            smooth: true
-                        }
-                    }
-
-                    Rectangle {
-                        id: avatarFallback
-                        anchors.fill: parent
-                        radius: width / 2
-                        visible: !(parent.avatarSource && parent.avatarSource.length > 0)
-                        property var fallback: window.avatarGradientFor(model.user)
-                        gradient: Gradient {
-                            GradientStop { position: 0.0; color: avatarFallback.fallback.top }
-                            GradientStop { position: 1.0; color: avatarFallback.fallback.bottom }
-                        }
-                    }
-                }
-
-                Column {
-                    width: parent.width - 52
-                    spacing: 6
-
-                    Text {
-                        id: usernameText
-                        text: model.displayContext !== undefined ? model.displayContext : (model.isPrivate ? model.user + " • private channel" : model.user)
-                        color: model.isPrivate ? palette.accent : (messageContainer.isOwnMessage ? palette.accent : palette.textSecondary)
-                        font.pixelSize: window.scaleFont(12)
-                        font.bold: true
-                        topPadding: isFirst ? 2 : 0
-                        horizontalAlignment: messageContainer.isOwnMessage ? Text.AlignRight : Text.AlignLeft
-                        anchors.right: messageContainer.isOwnMessage ? parent.right : undefined
-                        anchors.left: messageContainer.isOwnMessage ? undefined : parent.left
-                    }
-
-                    Rectangle {
-                        id: messageBubble
-                        width: Math.max(180, Math.min(bubbleContent.implicitWidth + 40, parent.width))
-                        radius: 18
-                        color: messageContainer.isSystem ? palette.accentSoft : (model.isPrivate ? ((model.isOutgoing === true) ? palette.card : palette.accentSoft) : (messageContainer.isOwnMessage ? palette.card : palette.accentSoft))
-                        border.width: 1
-                        property color baseBorder: messageContainer.isSystem ? palette.accent : (model.isPrivate ? ((model.isOutgoing === true) ? palette.canvas : palette.accent) : (messageContainer.isOwnMessage ? palette.canvas : palette.accent))
-                        property bool hasText: model.text && model.text.length > 0
-                        property bool hasFile: model.fileName && model.fileName.length > 0
-                        implicitHeight: bubbleContent.implicitHeight + 40
-                        border.color: baseBorder
-                        anchors.right: messageContainer.isOwnMessage ? parent.right : undefined
-                        anchors.left: messageContainer.isOwnMessage ? undefined : parent.left
-                        Behavior on border.color {
-                            ColorAnimation {
-                                duration: 260
-                                easing.type: Easing.OutQuad
-                            }
-                        }
-
-                        SequentialAnimation {
-                            id: systemGlow
-                            running: false
-                            ColorAnimation {
-                                target: messageBubble
-                                property: "border.color"
-                                to: palette.accentBold
-                                duration: 120
-                                easing.type: Easing.OutQuad
-                            }
-                            ColorAnimation {
-                                target: messageBubble
-                                property: "border.color"
-                                to: messageBubble.baseBorder
-                                duration: 420
-                                easing.type: Easing.OutCubic
-                            }
-                        }
-
-                        Component.onCompleted: {
-                            if (messageContainer.isSystem) {
-                                systemGlow.restart()
-                            }
-                        }
-
-                        Column {
-                            id: bubbleContent
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.leftMargin: 20
-                            anchors.rightMargin: 20
-                            anchors.top: parent.top
-                            anchors.topMargin: 20
-                            spacing: messageBubble.hasText && messageBubble.hasFile ? 12 : 6
-
-                            Text {
-                                id: messageText
-                                visible: messageBubble.hasText
-                                text: model.text
-                                color: palette.textPrimary
-                                wrapMode: Text.Wrap
-                                width: Math.min(implicitWidth, parent.parent.parent.width - 52 - 40)
-                                font.pixelSize: window.scaleFont(15)
-                                lineHeight: 1.35
-                            }
-
-                            Rectangle {
-                                id: fileAttachment
-                                width: messageText.visible ? messageText.width : 280
-                                visible: messageBubble.hasFile
-                                radius: 10
-                                color: palette.surface
-                                border.color: palette.outline
-                                border.width: 1
-                                implicitHeight: attachmentRow.implicitHeight + 16
-
-                                RowLayout {
-                                    id: attachmentRow
-                                    anchors.fill: parent
-                                    anchors.margins: 12
-                                    spacing: 12
-
-                                    Text {
-                                        text: "📎"
-                                        font.pixelSize: window.scaleFont(20)
-                                        color: palette.accent
-                                        font.family: window.emojiFontFamily
-                                    }
-
-                                    ColumnLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 2
-
-                                        Text {
-                                            text: model.fileName
-                                            color: palette.textPrimary
-                                            font.pixelSize: window.scaleFont(13)
-                                            elide: Text.ElideRight
-                                            Layout.fillWidth: true
-                                        }
-
-                                        Text {
-                                            text: window.formatFileSize(model.fileSize)
-                                            color: palette.textSecondary
-                                            font.pixelSize: window.scaleFont(11)
-                                            Layout.fillWidth: true
-                                        }
-                                    }
-
-
-                                Button {
-                                    text: "Download"
-                                    focusPolicy: Qt.NoFocus
-                                    enabled: model.fileData && model.fileData.length > 0
-
-                                    background: Rectangle {
-                                        radius: 8
-                                        color: parent.enabled ? (parent.hovered ? palette.accent : palette.canvas) : palette.surface
-                                        border.color: palette.outline
-                                        border.width: 1
-
-                                        Behavior on color {
-                                            ColorAnimation { duration: 150 }
-                                        }
-                                    }
-
-                                    contentItem: Text {
-                                        text: parent.text
-                                        color: parent.enabled ? palette.textPrimary : palette.textSecondary
-                                        font.pixelSize: window.scaleFont(12)
-                                        horizontalAlignment: Text.AlignHCenter
-                                        verticalAlignment: Text.AlignVCenter
-                                    }
-
-                                    onClicked: {
-                                        if (!model.fileData || model.fileData.length === 0) {
-                                            console.error("[QML] Cannot download: file data is empty")
-                                            return
-                                        }
-
-                                        console.log("[QML] Downloading:", model.fileName)
-
-                                        var result = chatClient.saveFileToDownloads(
-                                            model.fileName || "download",
-                                            model.fileData,
-                                            model.fileMime || "application/octet-stream"
-                                        )
-
-                                        // Add system message to the correct conversation
-                                        var systemMessage = {
-                                            "user": "System",
-                                            "text": result && result.length > 0
-                                                ? "File downloaded successfully: " + model.fileName
-                                                : "Failed to download file: " + model.fileName,
-                                            "fileName": "",
-                                            "fileMime": "",
-                                            "fileData": "",
-                                            "fileSize": 0,
-                                            "timestamp": formatTimestamp("")
-                                        }
-
-                                        if (model.isPrivate) {
-                                            // Add to private conversation
-                                            var currentTab = conversationTabsModel.get(conversationTabBar.currentIndex)
-                                            if (currentTab && currentTab.isPrivate) {
-                                                var peerModel = window.privateMessageModels[currentTab.key]
-                                                if (peerModel) {
-                                                    systemMessage.isPrivate = true
-                                                    systemMessage.isOutgoing = false
-                                                    systemMessage.displayContext = "System"
-                                                    systemMessage.status = ""
-                                                    systemMessage.messageId = 0
-                                                    systemMessage.readNotified = true
-                                                    peerModel.append(systemMessage)
-                                                }
-                                            }
-                                        } else {
-                                            // Add to public chat
-                                            systemMessage.isPrivate = false
-                                            messagesModel.append(systemMessage)
-                                        }
-
-                                        if (result && result.length > 0) {
-                                            console.log("[QML] ✓ File saved to:", result)
-                                        } else {
-                                            console.error("[QML] ✗ Download failed")
-                                        }
-                                    }
-
-                                    ToolTip {
-                                        visible: parent.hovered && (!model.fileData || model.fileData.length === 0)
-                                        text: "File data not available"
-                                        delay: 500
-                                    }
-                                }
-                            }
-                        }
-
-                            RowLayout {
-                                width: parent.width
-                                Layout.fillWidth: true
-
-                                // Left-aligned timestamp
-                                Text {
-                                    color: palette.textSecondary
-                                    font.pixelSize: window.scaleFont(11)
-                                    text: model.timestamp ? model.timestamp : ""
-                                    Layout.alignment: Qt.AlignLeft
-                                }
-
-                                // Right-aligned private status
-                                Text {
-                                    Layout.fillWidth: true
-                                    color: palette.textSecondary
-                                    font.pixelSize: window.scaleFont(11)
-                                    horizontalAlignment: Text.AlignRight
-                                    text: {
-                                        if (!model.isPrivate || model.isOutgoing !== true) {
-                                            return ""
-                                        }
-                                        var state = model.status ? model.status.toLowerCase() : ""
-                                        if (state === "seen") {
-                                            return "\u2713\u2713 Seen"
-                                        }
-                                        if (state === "delivered") {
-                                            return "\u2713 Delivered"
-                                        }
-                                        if (state === "sent") {
-                                            return "\u2713 Sent"
-                                        }
-                                        return ""
-                                    }
-                                    visible: text && text.length > 0
-                                }
-                            }
-                        }
-
-                        // Context Menu MouseArea for copying
-                        MouseArea {
-                            id: contextMenuArea
-                            anchors.fill: parent
-                            acceptedButtons: Qt.RightButton
-                            propagateComposedEvents: true
-
-                            onPressed: function(mouse) {
-                                if (mouse.button === Qt.RightButton) {
-                                    messageContextMenu.messageText = model.text || ""
-                                    messageContextMenu.userName = model.user || ""
-                                    messageContextMenu.hasText = (model.text && model.text.length > 0)
-                                    messageContextMenu.hasFile = (model.fileName && model.fileName.length > 0)
-                                    messageContextMenu.fileName = model.fileName || ""
-
-                                    // Convert local coordinates to global/window coordinates
-                                    var globalPos = contextMenuArea.mapToItem(null, mouse.x, mouse.y)
-                                    messageContextMenu.popup(globalPos.x, globalPos.y)
-
-                                    mouse.accepted = true
-                                } else {
-                                    mouse.accepted = false
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Component {
-        id: userDelegateComponent
-
-        Rectangle {
-            id: userCard
-            width: usersView.width
-            height: 56
-            radius: 20
-            color: hovered ? palette.accentSoft : palette.card
-            border.color: hovered ? palette.accent : palette.outline
-            border.width: hovered ? 1 : 0
-            transformOrigin: Item.Center
-            scale: hovered ? 1.04 : 1.0
-
-            Behavior on scale {
-                NumberAnimation {
-                    duration: 140
-                    easing.type: Easing.OutQuad
-                }
-            }
-
-            Behavior on color {
-                ColorAnimation {
-                    duration: 140
-                    easing.type: Easing.OutQuad
-                }
-            }
-
-            Behavior on border.color {
-                ColorAnimation {
-                    duration: 140
-                    easing.type: Easing.OutQuad
-                }
-            }
-
-            property bool hovered: mouseArea.containsMouse
-
-            MouseArea {
-                id: mouseArea
-                anchors.fill: parent
-                hoverEnabled: true
-                onClicked: window.openPrivateConversation(name)
-            }
-
-            RowLayout {
-                anchors.fill: parent
-                anchors.margins: 14
-                spacing: 12
-
-                Item {
-                    id: avatarBadge
-                    Layout.preferredWidth: 30
-                    Layout.preferredHeight: 30
-                    property string avatarSource: window.avatarSourceFor(name)
-                    property var avatarColors: window.avatarGradientFor(name)
-
-                    Rectangle {
-                        anchors.fill: parent
-                        radius: width / 2
-                        visible: avatarBadge.avatarSource && avatarBadge.avatarSource.length > 0
-                        color: "transparent"
-                        clip: true
-
-                        Image {
-                            anchors.fill: parent
-                            source: avatarBadge.avatarSource
-                            fillMode: Image.PreserveAspectCrop
-                            smooth: true
-                        }
-                    }
-
-                    Rectangle {
-                        anchors.fill: parent
-                        radius: width / 2
-                        visible: !(avatarBadge.avatarSource && avatarBadge.avatarSource.length > 0)
-                        gradient: Gradient {
-                            GradientStop { position: 0.0; color: avatarBadge.avatarColors.top }
-                            GradientStop { position: 1.0; color: avatarBadge.avatarColors.bottom }
-                        }
-                        border.color: "#60FFFFFF"
-                        border.width: 1
-                    }
-                }
-
-                ColumnLayout {
                     Layout.fillWidth: true
-                    spacing: 2
-
-                    Text {
-                        text: name
-                        color: palette.textPrimary
-                        font.pixelSize: window.scaleFont(14)
-                        font.bold: true
+                    Layout.fillHeight: true
+                    
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: Theme.radius_xxl
+                        border.color: Theme.outline
+                        border.width: 1
+                        
+                        gradient: Gradient {
+                            GradientStop { position: 0.0; color: Theme.panel }
+                            GradientStop { position: 1.0; color: Theme.surface }
+                        }
+                        
+                        ColumnLayout {
+                            anchors.fill: parent
+                            anchors.margins: 28
+                            spacing: Theme.spacing_lg
+                            
+                            ConversationTabs {
+                                id: conversationTabBar
+                                Layout.fillWidth: true
+                                model: conversationTabsModel
+                                
+                                onTabCloseRequested: function(key) {
+                                    closePrivateConversation(key)
+                                }
+                                
+                                onCurrentIndexChanged: {
+                                    if (currentIndex >= 0 && currentIndex < conversationTabsModel.count) {
+                                        var tab = conversationTabsModel.get(currentIndex)
+                                        clearConversationUnread(tab.key)
+                                    }
+                                }
+                            }
+                            
+                            StackLayout {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                currentIndex: conversationTabBar.currentIndex
+                                
+                                Repeater {
+                                    model: conversationTabsModel
+                                    
+                                    delegate: Loader {
+                                        Layout.fillWidth: true
+                                        Layout.fillHeight: true
+                                        
+                                        sourceComponent: model.isPrivate 
+                                            ? privateChatComponent 
+                                            : publicChatComponent
+                                        
+                                        onLoaded: {
+                                            if (model.isPrivate) {
+                                                item.setup(model.key, model.title)
+                                                item.messagesModel = ensurePrivateModel(model.key)
+                                            } else {
+                                                item.setup()
+                                                item.messagesModel = messagesModel
+                                            }
+                                            conversationPages[model.key] = item
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
-
-                    Text {
-                        text: "Invite to private line"
-                        color: palette.textSecondary
-                        font.pixelSize: window.scaleFont(11)
+                }
+                
+                // User list panel
+                UserList {
+                    Layout.preferredWidth: 260
+                    Layout.fillHeight: true
+                    
+                    model: usersModel
+                    userCount: window.totalUserCount
+                    
+                    onUserClicked: function(username) {
+                        openPrivateConversation(username)
+                    }
+                    
+                    function getAvatarSource(username) {
+                        return avatarSourceFor(username)
                     }
                 }
             }
         }
     }
-
-    // --- BACKEND CONNECTIONS ---
+    
+    // ========== TOAST NOTIFICATION ==========
+    Toast {
+        id: toast
+    }
+    
+    // ========== PAGE COMPONENTS ==========
+    Component {
+        id: publicChatComponent
+        
+        PublicChatPage {
+            userCount: window.totalUserCount
+            typingUsers: window.publicTypingUsers
+            pendingFile: window.publicPendingFile
+            draft: window.publicDraft
+            
+            onSendMessage: function(text, filePath) {
+                chatClient.sendMessageWithAttachment(text, filePath)
+                window.publicDraft = ""
+                window.publicPendingFile = null
+            }
+            
+            onFileSelected: function(filePath) {
+                var meta = chatClient.inspectFile(filePath)
+                if (meta && meta.path) {
+                    window.publicPendingFile = meta
+                }
+            }
+            
+            onTypingStateChanged: function(isTyping) {
+                chatClient.indicatePublicTyping(isTyping)
+            }
+            
+            onCopyRequested: function(text) {
+                chatClient.copyToClipboard(text)
+            }
+        }
+    }
+    
+    Component {
+        id: privateChatComponent
+        
+        PrivateChatPage {
+            onSendMessage: function(text, filePath) {
+                if (peerKey.length > 0) {
+                    chatClient.sendPrivateMessageWithAttachment(peerKey, text, filePath)
+                    privateDrafts[peerKey] = ""
+                    privatePendingFiles[peerKey] = null
+                }
+            }
+            
+            onFileSelected: function(filePath) {
+                var meta = chatClient.inspectFile(filePath)
+                if (meta && meta.path && peerKey.length > 0) {
+                    privatePendingFiles[peerKey] = meta
+                    pendingFile = meta
+                }
+            }
+            
+            onTypingStateChanged: function(isTyping) {
+                if (peerKey.length > 0) {
+                    chatClient.indicatePrivateTyping(peerKey, isTyping)
+                }
+            }
+            
+            onCopyRequested: function(text) {
+                chatClient.copyToClipboard(text)
+            }
+        }
+    }
+    
+    // ========== BACKEND CONNECTIONS ==========
     Connections {
         target: chatClient
-
-        function onMessageReceived(username, message, file) {
-            console.log("[QML] onMessageReceived user=", username,
-                        "textLen=", message ? message.length : 0,
-                        "file?=", !!file,
-                        "fileName=", (file && file.name) ? file.name : "",
-                        "size=", (file && file.size) ? file.size : 0)
-            if (file && (file.is_private === true || (file.recipient && file.recipient.length > 0))) {
-                // This is a private file payload; it will be handled by private handlers
-                return
-            }
+        
+        function onMessageReceivedEx(username, message, file, timestamp) {
             messagesModel.append({
                 "user": username,
                 "text": message,
+                "timestamp": formatTimestamp(timestamp),
                 "isPrivate": false,
+                "isOutgoing": false,
+                "displayContext": username,
+                "status": "",
                 "fileName": file && file.name ? file.name : "",
                 "fileMime": file && file.mime ? file.mime : "",
                 "fileData": file && file.data ? file.data : "",
-                "fileSize": file && file.size ? Number(file.size) : 0,
-                "timestamp": formatTimestamp("")
+                "fileSize": file && file.size ? Number(file.size) : 0
             })
-            window.updatePublicTyping(username, false)
-            var idx = window.conversationIndex("public")
-            var isActive = idx === conversationTabBar.currentIndex
-            if (!isActive && username !== chatClient.username) {
-                window.incrementConversationUnread("public")
-            }
-            // Play notification sound for messages from others
+            
             if (username !== chatClient.username) {
-                window.playSoundIfAllowed(publicMessageSound)
-            }
-            var page = window.conversationPages["public"]
-            if (page && page.scrollToEnd) {
-                page.scrollToEnd(isActive)
+                playSoundIfAllowed(publicMessageSound)
             }
         }
-
-        function onGeneralHistoryReceived(history) {
-            messagesModel.clear()
-            if (!history) {
-                return
-            }
-            for (var i = 0; i < history.length; ++i) {
-                var entry = history[i]
-                if (!entry) {
-                    continue
-                }
-                messagesModel.append({
-                    "user": entry.username ? entry.username : "Unknown",
-                    "text": entry.message ? entry.message : "",
-                    "isPrivate": false,
-                    "fileName": entry.file && entry.file.name ? entry.file.name : "",
-                    "fileMime": entry.file && entry.file.mime ? entry.file.mime : "",
-                    "fileData": entry.file && entry.file.data ? entry.file.data : "",
-                    "fileSize": entry.file && entry.file.size ? Number(entry.file.size) : 0,
-                    "timestamp": formatTimestamp(entry.timestamp ? entry.timestamp : "")
-                })
-            }
-            window.setConversationUnread("public", false)
-            var page = window.conversationPages["public"]
-            if (page && page.scrollToEnd) {
-                page.scrollToEnd(false)
-            }
-        }
-
-        function onPrivateMessageReceived(sender, recipient, message, messageId, status, file) {
-            var currentUser = chatClient.username
-            var isOutgoing = sender === currentUser
-            var peer = isOutgoing ? recipient : sender
-            if (!peer || peer.length === 0) {
-                return
-            }
-            window.appendPrivateMessage(peer, sender, message, isOutgoing, messageId, status, file, formatTimestamp(""))
-            if (!isOutgoing) {
-                window.updatePrivateTyping(sender, false)
-            }
-        }
-
-        function onPrivateMessageSent(sender, recipient, message, messageId, status, file) {
-            var peer = recipient
-            if (!peer || peer.length === 0) {
-                return
-            }
-            window.appendPrivateMessage(peer, sender, message, true, messageId, status, file, formatTimestamp(""))
-            window.setConversationUnread(peer, false)
-        }
-
+        
         function onPrivateMessageReceivedEx(sender, recipient, message, messageId, status, file, timestamp) {
-            var currentUser = chatClient.username
-            var isOutgoing = sender === currentUser
-            var peer = isOutgoing ? recipient : sender
-            if (!peer || peer.length === 0) {
-                return
-            }
-            window.appendPrivateMessage(peer, sender, message, isOutgoing, messageId, status, file, formatTimestamp(timestamp))
-            if (!isOutgoing) {
-                window.updatePrivateTyping(sender, false)
-            }
+            var peer = sender
+            appendPrivateMessage(peer, sender, message, false, messageId, status, file, formatTimestamp(timestamp))
         }
-
+        
         function onPrivateMessageSentEx(sender, recipient, message, messageId, status, file, timestamp) {
             var peer = recipient
-            if (!peer || peer.length === 0) {
-                return
-            }
-            window.appendPrivateMessage(peer, sender, message, true, messageId, status, file, formatTimestamp(timestamp))
-            window.setConversationUnread(peer, false)
+            appendPrivateMessage(peer, sender, message, true, messageId, status, file, formatTimestamp(timestamp))
         }
-
-        function onPrivateMessageRead(messageId) {
-            window.setPrivateMessageStatusById(messageId, "seen")
-        }
-
-        function onPublicTypingReceived(username, isTyping) {
-            window.updatePublicTyping(username, isTyping)
-        }
-
-        function onPrivateTypingReceived(username, isTyping) {
-            window.updatePrivateTyping(username, isTyping)
-        }
-
+        
         function onUsersUpdated(users) {
             usersModel.clear()
             window.totalUserCount = users.length
+            
             for (var i = 0; i < users.length; i++) {
                 if (users[i] !== chatClient.username) {
                     usersModel.append({"name": users[i]})
                 }
             }
-            var filteredPublic = []
-            for (var j = 0; j < window.publicTypingUsers.length; ++j) {
-                var name = window.publicTypingUsers[j]
-                if (users.indexOf(name) !== -1) {
-                    filteredPublic.push(name)
-                }
-            }
-            window.publicTypingUsers = filteredPublic
-            window.publicTypingText = window.buildPublicTypingText(filteredPublic)
-            var refreshedPrivate = {}
-            for (var k = 0; k < users.length; ++k) {
-                var user = users[k]
-                if (window.privateTypingStates[user]) {
-                    refreshedPrivate[user] = true
-                }
-            }
-            window.privateTypingStates = refreshedPrivate
-            var trimmedAvatars = {}
-            var knownUsers = Object.keys(window.userAvatars)
-            for (var a = 0; a < users.length; ++a) {
-                var candidate = users[a]
-                if (knownUsers.indexOf(candidate) !== -1) {
-                    trimmedAvatars[candidate] = window.userAvatars[candidate]
-                }
-            }
-            window.userAvatars = trimmedAvatars
         }
-
+        
+        function onAvatarsUpdated(avatars) {
+            window.userAvatars = avatars || ({})
+        }
+        
         function onDisconnected(userRequested) {
-            messagesModel.clear()
-            usersModel.clear()
-            window.totalUserCount = 0
-            window.resetPrivateConversations()
-            window.userAvatars = ({})
-
-            // Show different messages based on whether user clicked logout
+            resetState()
+            
             if (userRequested) {
                 messagesModel.append({
                     "user": "System",
                     "text": "Disconnected from server",
+                    "timestamp": formatTimestamp(""),
                     "isPrivate": false,
+                    "isOutgoing": false,
+                    "displayContext": "System",
+                    "status": "",
                     "fileName": "",
                     "fileMime": "",
                     "fileData": "",
@@ -3171,299 +591,61 @@ ApplicationWindow {
                 messagesModel.append({
                     "user": "System",
                     "text": "Connection lost. Attempting to reconnect...",
+                    "timestamp": formatTimestamp(""),
                     "isPrivate": false,
+                    "isOutgoing": false,
+                    "displayContext": "System",
+                    "status": "",
                     "fileName": "",
                     "fileMime": "",
                     "fileData": "",
                     "fileSize": 0
                 })
             }
-
-            window.setConversationUnread("public", false)
-            disconnectAnimation.restart()
         }
-
-        function onReconnecting(attempt) {
-            console.log("[QML] Reconnection attempt:", attempt)
-            messagesModel.append({
-                "user": "System",
-                "text": "Reconnecting... (attempt " + attempt + ")",
-                "isPrivate": false,
-                "fileName": "",
-                "fileMime": "",
-                "fileData": "",
-                "fileSize": 0
-            })
-            var page = window.conversationPages["public"]
-            if (page && page.scrollToEnd) {
-                page.scrollToEnd(false)
-            }
-        }
-
+        
         function onReconnected() {
-            console.log("[QML] Successfully reconnected")
             messagesModel.append({
                 "user": "System",
                 "text": "✓ Reconnected successfully!",
+                "timestamp": formatTimestamp(""),
                 "isPrivate": false,
+                "isOutgoing": false,
+                "displayContext": "System",
+                "status": "",
                 "fileName": "",
                 "fileMime": "",
                 "fileData": "",
                 "fileSize": 0
             })
-            var page = window.conversationPages["public"]
-            if (page && page.scrollToEnd) {
-                page.scrollToEnd(false)
-            }
         }
-
+        
         function onErrorReceived(message) {
-            messagesModel.append({
-                "user": "System",
-                "text": message,
-                "isPrivate": false,
-                "fileName": "",
-                "fileMime": "",
-                "fileData": "",
-                "fileSize": 0
-            })
-            var idx = window.conversationIndex("public")
-            var isActive = idx === conversationTabBar.currentIndex
-            if (!isActive) {
-                window.setConversationUnread("public", true)
-            }
-            var page = window.conversationPages["public"]
-            if (page && page.scrollToEnd) {
-                page.scrollToEnd(isActive)
-            }
+            toast.show(message, true)
         }
-
-        function onUsernameChanged(name) {
-            usernameField.text = name
-            if (name.length > 0) {
-                window.focusActiveComposer()
-            }
-        }
-
-        function onAvatarsUpdated(map) {
-            window.userAvatars = map ? map : ({})
-        }
-
-        function onAvatarUpdated(username, info) {
-            if (!username || username.length === 0) {
-                return
-            }
-            var snapshot = Object.assign({}, window.userAvatars)
-            if (info && info.data) {
-                snapshot[username] = info
-            } else if (snapshot.hasOwnProperty(username)) {
-                delete snapshot[username]
-            }
-            window.userAvatars = snapshot
-        }
-
-        function onFileTransferComplete(transferId, filename) {
-            console.log("[QML] File transfer complete:", transferId, filename)
-            window.clearDownload(transferId)
-            // File is now available in the message, user can click download button
-        }
-
-        function onFileTransferError(transferId, errorMessage) {
-            console.error("[QML] File transfer error:", transferId, errorMessage)
-            window.clearDownload(transferId)
-
-            // Show error in public chat since we don't know which conversation this belongs to
-            messagesModel.append({
-                "user": "System",
-                "text": "File transfer failed: " + errorMessage,
-                "isPrivate": false,
-                "fileName": "",
-                "fileMime": "",
-                "fileData": "",
-                "fileSize": 0,
-                "timestamp": formatTimestamp("")
-            })
-        }
-    }
-
-    // --- MESSAGE CONTEXT MENU ---
-    Menu {
-        id: messageContextMenu
-
-        property string messageText: ""
-        property string userName: ""
-        property bool hasText: false
-        property bool hasFile: false
-        property string fileName: ""
-
-        width: 200
-
-        background: Rectangle {
-            implicitWidth: 200
-            implicitHeight: 40
-            color: window.palette.panel
-            border.color: window.palette.outline
-            border.width: 1
-            radius: 8
-        }
-
-        delegate: MenuItem {
-            id: menuItem
-
-            contentItem: Text {
-                text: menuItem.text
-                color: menuItem.enabled ? window.palette.textPrimary : window.palette.textSecondary
-                font.pixelSize: window.scaleFont(13)
-                opacity: menuItem.enabled ? 1.0 : 0.5
-                horizontalAlignment: Text.AlignLeft
-                verticalAlignment: Text.AlignVCenter
-            }
-
-            background: Rectangle {
-                color: menuItem.highlighted ? window.palette.surface : "transparent"
-                radius: 4
-            }
-
-            height: 32
-            padding: 8
-        }
-
-        MenuItem {
-            text: "Copy Message"
-            enabled: messageContextMenu.hasText
-            onTriggered: {
-                window.copyToClipboard(messageContextMenu.messageText)
-            }
-        }
-
-        MenuItem {
-            text: "Copy with Username"
-            enabled: messageContextMenu.hasText
-            onTriggered: {
-                var fullText = messageContextMenu.userName + ": " + messageContextMenu.messageText
-                window.copyToClipboard(fullText)
-            }
-        }
-
-        MenuSeparator {
-            visible: messageContextMenu.hasFile
-        }
-
-        MenuItem {
-            text: "Copy Filename"
-            visible: messageContextMenu.hasFile
-            enabled: messageContextMenu.hasFile
-            onTriggered: {
-                window.copyToClipboard(messageContextMenu.fileName)
+        
+        function onGeneralHistoryReceived(history) {
+            messagesModel.clear()
+            if (!history) return
+            
+            for (var i = 0; i < history.length; ++i) {
+                var entry = history[i]
+                if (!entry) continue
+                
+                messagesModel.append({
+                    "user": entry.username || "Unknown",
+                    "text": entry.message || "",
+                    "timestamp": formatTimestamp(entry.timestamp || ""),
+                    "isPrivate": false,
+                    "isOutgoing": false,
+                    "displayContext": entry.username || "Unknown",
+                    "status": "",
+                    "fileName": entry.file && entry.file.name ? entry.file.name : "",
+                    "fileMime": entry.file && entry.file.mime ? entry.file.mime : "",
+                    "fileData": entry.file && entry.file.data ? entry.file.data : "",
+                    "fileSize": entry.file && entry.file.size ? Number(entry.file.size) : 0
+                })
             }
         }
     }
-
-     // Toast Notification Component
-    Rectangle {
-        id: toast
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: 80
-        width: Math.min(400, parent.width - 64)
-        height: toastContent.implicitHeight + 32
-        radius: 16
-        color: palette.panel
-        border.color: palette.accent
-        border.width: 1
-        opacity: 0
-        visible: opacity > 0
-        z: 10000 // Ensure it's on top of everything
-
-        property string message: ""
-        property string icon: "✓"
-        property bool isError: false
-
-        // Shadow effect
-        layer.enabled: true
-        layer.effect: MultiEffect {
-            shadowEnabled: true
-            shadowHorizontalOffset: 0
-            shadowVerticalOffset: 8
-            shadowBlur: 24
-            shadowColor: "#40000000"
-        }
-
-        RowLayout {
-            id: toastContent
-            anchors.fill: parent
-            anchors.margins: 16
-            spacing: 12
-
-            Text {
-                text: toast.icon
-                color: toast.isError ? palette.warning : palette.success
-                font.pixelSize: window.scaleFont(20)
-                font.family: window.emojiFontFamily
-            }
-
-            Text {
-                text: toast.message
-                color: palette.textPrimary
-                font.pixelSize: window.scaleFont(14)
-                wrapMode: Text.WordWrap
-                Layout.fillWidth: true
-            }
-        }
-
-        // Slide up and fade in animation
-        ParallelAnimation {
-            id: showToast
-            PropertyAnimation {
-                target: toast
-                property: "opacity"
-                to: 1
-                duration: 300
-                easing.type: Easing.OutCubic
-            }
-            PropertyAnimation {
-                target: toast
-                property: "anchors.bottomMargin"
-                to: 80
-                duration: 300
-                easing.type: Easing.OutCubic
-            }
-        }
-
-        // Slide down and fade out animation
-        ParallelAnimation {
-            id: hideToast
-            PropertyAnimation {
-                target: toast
-                property: "opacity"
-                to: 0
-                duration: 250
-                easing.type: Easing.InCubic
-            }
-            PropertyAnimation {
-                target: toast
-                property: "anchors.bottomMargin"
-                to: 40
-                duration: 250
-                easing.type: Easing.InCubic
-            }
-        }
-
-        Timer {
-            id: toastTimer
-            interval: 4000  // 4 seconds for better visibility
-            onTriggered: hideToast.start()
-        }
-
-        function show(msg, isErr) {
-            toast.message = msg
-            toast.isError = isErr || false
-            toast.icon = isErr ? "✗" : "✓"
-            toast.anchors.bottomMargin = 40
-            showToast.start()
-            toastTimer.restart()
-        }
-    }
-
-}
 }
