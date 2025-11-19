@@ -4,8 +4,9 @@ import threading
 import time
 import tempfile
 from pathlib import Path
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, Any
 from PySide6.QtCore import QObject, Signal, QUrl
+from .encryption import aes_encrypt
 
 
 MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB
@@ -38,27 +39,28 @@ class FileHandler(QObject):
     ) -> Optional[str]:
         """Send file in encrypted chunks."""
         try:
-            if not isinstance(file_data, bytes):
-                print(f"[FileHandler] Invalid file_data type: {type(file_data)}")
-                self.errorNotification.emit("Invalid file data.")
-                return None
+            logger.info(f"Preparing to send file: {filename}, size: {len(file_data)} bytes")
             
             if not filename or not isinstance(filename, str):
-                print(f"[FileHandler] Invalid filename: {filename}")
+                print(f"[CLIENT FILE] ERROR: Invalid filename: {filename}")
                 self.errorNotification.emit("Invalid filename.")
                 return None
-            
-            from ..network.encryption import aes_encrypt
-            
+
             if not self._session_manager.session_key:
+                logger.error("[CLIENT FILE] Session key not established")
                 self.errorNotification.emit(
                     "Session key not established; cannot send file securely."
                 )
                 return None
             
+            logger.info(f"[CLIENT FILE] START: file={filename}, size={len(file_data)} bytes, "
+                  f"type={'private' if recipient else 'public'}")
+            
             # Encrypt entire file
             ciphertext, iv = aes_encrypt(file_data, self._session_manager.session_key)
             iv_b64 = base64.b64encode(iv).decode("utf-8")
+            
+            logger.info(f"[CLIENT FILE] ENCRYPTED: ciphertext_size={len(ciphertext)} bytes")
             
             # Chunk ciphertext
             chunk_size = 64 * 1024
@@ -68,6 +70,8 @@ class FileHandler(QObject):
             ]
             total_chunks = len(chunks)
             transfer_id = uuid.uuid4().hex
+            
+            logger.info(f"[CLIENT FILE] CHUNKS: transfer_id={transfer_id}, total_chunks={total_chunks}")
             
             # First chunk with metadata
             first_chunk = {
@@ -86,8 +90,10 @@ class FileHandler(QObject):
             
             if recipient:
                 first_chunk["recipient"] = recipient
+                logger.info(f"[CLIENT FILE] SENDING: chunk 0 (private to {recipient})")
                 self._emit("private_file_chunk", first_chunk)
             else:
+                logger.info(f"[CLIENT FILE] SENDING: chunk 0 (public)")
                 self._emit("public_file_chunk", first_chunk)
             
             # Send remaining chunks
@@ -105,12 +111,16 @@ class FileHandler(QObject):
                 else:
                     self._emit("public_file_chunk", chunk)
                 
+                logger.info(f"[CLIENT FILE] SENDING: chunk {i}/{total_chunks}")
                 time.sleep(0.01)  # Prevent overwhelming server
             
+            logger.info(f"[CLIENT FILE] COMPLETE: transfer_id={transfer_id}, all {total_chunks} chunks sent")
             return transfer_id
             
         except Exception as e:
-            print(f"[FileHandler] Secure transfer failed: {e}")
+            logger.error(f"[CLIENT FILE] ERROR: Secure transfer failed: {e}")
+            import traceback
+            traceback.print_exc()
             self.errorNotification.emit("File transfer failed. Please try again.")
             return None
     

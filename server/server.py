@@ -45,7 +45,7 @@ class ChatServer:
         
         # Initialize handlers
         self.connection_handler = ConnectionHandler(
-            self.sio, self.user_service, self.history_service
+            self.sio, self.user_service, self.history_service, self.file_transfer_service
         )
         self.message_handler = MessageHandler(
             self.sio, self.user_service, self.message_service,
@@ -159,7 +159,48 @@ def get_app():
 
 
 if __name__ == "__main__":
+    import signal
+    import sys
+    
     server = ChatServer()
+    http_server = None
+    
+    def signal_handler(sig, frame):
+        """Handle graceful shutdown on Ctrl+C."""
+        logging.info("Shutdown signal received, closing connections...")
+        
+        # Disconnect all clients
+        try:
+            if hasattr(server.sio, 'manager') and hasattr(server.sio.manager, 'rooms'):
+                rooms = server.sio.manager.rooms.get('/', {})
+                if rooms:
+                    for sid in list(rooms.keys()):
+                        try:
+                            server.sio.disconnect(sid)
+                        except Exception as e:
+                            logging.debug(f"Error disconnecting {sid}: {e}")
+                    logging.info(f"Disconnected {len(rooms)} clients")
+                else:
+                    logging.info("No clients connected")
+            else:
+                logging.info("No clients connected")
+        except Exception as e:
+            logging.debug(f"Error accessing client list: {e}")
+        
+        # Stop HTTP server if available
+        if http_server:
+            try:
+                if hasattr(http_server, 'stop'):
+                    http_server.stop()
+                elif hasattr(http_server, 'shutdown'):
+                    http_server.shutdown()
+            except Exception as e:
+                logging.debug(f"Error stopping HTTP server: {e}")
+        
+        logging.info("Server shutdown complete")
+        sys.exit(0)
+    
+    signal.signal(signal.SIGINT, signal_handler)
     
     logging.info(f"Starting server on {Config.HOST}:{Config.PORT}")
     
@@ -185,13 +226,4 @@ if __name__ == "__main__":
         except ImportError:
             # Fallback to Flask dev server (not recommended for production)
             logging.warning("eventlet/gevent not available, using Flask dev server")
-            server.app.run(host=Config.HOST, port=Config.PORT, debug=False)
-
-            datetime.now(timezone.utc).isoformat()
-
-            system_message = {
-                "username": "System",
-                "message": f"{username} has left the chat",
-                "timestamp": server_ts,
-            }
-            self.sio.emit("message", system_message)
+            server.app.run(host=Config.HOST, port=Config.PORT, debug=False, use_reloader=False)

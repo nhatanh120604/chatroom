@@ -8,7 +8,7 @@ from client.handlers.message_handler import MessageHandler
 from client.handlers.file_handler import FileHandler
 from client.handlers.typing_handler import TypingHandler
 from client.handlers.avatar_handler import AvatarHandler
-from client.network.socket_manager import SocketManager
+from client.handlers.socket_manager import SocketManager
 from client.utils.validators import FileValidator
 
 

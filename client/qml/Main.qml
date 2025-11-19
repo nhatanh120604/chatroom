@@ -6,6 +6,7 @@ import QtMultimedia
 import "./styles"
 import "./components"
 import "./pages"
+import "./assets"
 
 ApplicationWindow {
     id: window

@@ -22,7 +22,7 @@ class FileTransferService:
         except OSError as e:
             logging.error(f"Failed to create upload directory: {e}")
     
-    def handle_chunk(self, sid, sender_username, data, is_private=False):
+    def handle_chunk(self, sid, sender_username, data, session_key, is_private=False):
         """
         Handle incoming file chunk.
         Returns (success, error_message, is_complete, decrypted_path)
@@ -61,6 +61,11 @@ class FileTransferService:
             transfer["received_chunks"] += 1
             transfer["encrypted_chunks"][chunk_index] = base64.b64decode(chunk_data)
             
+            # Log progress
+            progress = f"{transfer['received_chunks']}/{transfer['total_chunks']}"
+            logging.debug(f"[FILE TRANSFER] PROGRESS: transfer_id={transfer_id}, "
+                         f"chunk_index={chunk_index}, progress={progress}")
+            
             # Check if transfer is complete
             is_complete = (
                 transfer["received_chunks"] >= transfer["total_chunks"]
@@ -70,43 +75,59 @@ class FileTransferService:
             if not is_complete:
                 return True, "", False, None
             
+            logging.info(f"[FILE TRANSFER] ALL CHUNKS RECEIVED: transfer_id={transfer_id}, "
+                        f"total_chunks={transfer['total_chunks']}")
+            
             # Decrypt and save file
             try:
-                decrypted_path = self._decrypt_and_save(transfer_id, transfer, sid)
+                decrypted_path = self._decrypt_and_save(transfer_id, transfer, session_key)
                 return True, "", True, decrypted_path
             except Exception as e:
                 logging.error(f"File decryption failed: {e}")
                 self.cleanup_transfer(transfer_id)
                 return False, str(e), False, None
     
-    def _decrypt_and_save(self, transfer_id, transfer, sender_sid):
+    def _decrypt_and_save(self, transfer_id, transfer, session_key):
         """Decrypt file and save to disk."""
-        from services.encryption_service import EncryptionService
-        
-        # Get session key
-        # Note: This needs access to session keys - passed through or refactored
-        # For now, assume it's available through encryption service
+        if not session_key:
+            raise ValueError("Session key required for decryption")
         
         iv_b64 = transfer.get("iv", "")
+        if not iv_b64:
+            raise ValueError("IV not found in transfer metadata")
+        
         iv = base64.b64decode(iv_b64)
         
-        # Reassemble ciphertext
+        # Reassemble ciphertext from chunks
         chunks_dict = transfer["encrypted_chunks"]
+        num_chunks = len(chunks_dict)
         ciphertext = b"".join(chunks_dict[i] for i in sorted(chunks_dict.keys()))
         
-        # This needs the session key - should be passed in or refactored
-        # For now, placeholder:
-        # plaintext = EncryptionService.aes_decrypt(ciphertext, key, iv)
-        # We'll need to refactor to pass the key
+        logging.info(f"[FILE TRANSFER] DECRYPT: transfer_id={transfer_id}, "
+                    f"chunks={num_chunks}, ciphertext_size={len(ciphertext)} bytes")
+        
+        # Decrypt using encryption service
+        try:
+            plaintext = self.encryption_service.aes_decrypt(ciphertext, session_key, iv)
+            logging.info(f"[FILE TRANSFER] DECRYPT SUCCESS: transfer_id={transfer_id}, "
+                        f"plaintext_size={len(plaintext)} bytes")
+        except Exception as e:
+            logging.error(f"[FILE TRANSFER] DECRYPT FAILED: transfer_id={transfer_id}, error={e}")
+            raise
         
         # Save to disk
         filename = transfer["metadata"].get("filename", "file")
         safe_name = os.path.basename(filename) or "file"
         out_path = os.path.join(Config.UPLOAD_DIR, f"{transfer_id}_{safe_name}")
         
-        # Placeholder - actual decryption needs session key
-        # with open(out_path, "wb") as f:
-        #     f.write(plaintext)
+        try:
+            with open(out_path, "wb") as f:
+                f.write(plaintext)
+            logging.info(f"[FILE TRANSFER] SAVED: transfer_id={transfer_id}, "
+                        f"path={out_path}, size={len(plaintext)} bytes")
+        except Exception as e:
+            logging.error(f"[FILE TRANSFER] SAVE FAILED: transfer_id={transfer_id}, error={e}")
+            raise
         
         return out_path
     

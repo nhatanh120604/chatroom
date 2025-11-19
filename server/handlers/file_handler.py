@@ -26,9 +26,27 @@ class FileHandler:
         """Process incoming file chunk."""
         sender_username = self.user_service.get_username(sid)
         transfer_id = data.get("transfer_id")
+        chunk_index = data.get("chunk_index")
+        is_last_chunk = data.get("is_last_chunk", False)
+        metadata = data.get("metadata")
+        
+        # Log chunk reception
+        if metadata:
+            total_chunks = metadata.get("total_chunks", "?")
+            filename = metadata.get("filename", "unknown")
+            logging.info(f"[FILE TRANSFER] START: transfer_id={transfer_id}, file={filename}, "
+                        f"total_chunks={total_chunks}, type={'private' if is_private else 'public'}")
+        else:
+            logging.debug(f"[FILE TRANSFER] CHUNK: transfer_id={transfer_id}, "
+                         f"chunk_index={chunk_index}, is_last={is_last_chunk}")
         
         # Get session key for decryption
         session_key = self.user_service.get_session_key(sid)
+        if not session_key:
+            error_msg = "Session key not established"
+            logging.error(f"[FILE TRANSFER] ERROR: {error_msg} for {sender_username}")
+            self.sio.emit("error", {"message": error_msg}, to=sid)
+            return
         
         # Handle chunk
         success, error, is_complete, file_path = \
@@ -37,13 +55,18 @@ class FileHandler:
             )
         
         if not success:
+            logging.error(f"[FILE TRANSFER] ERROR: transfer_id={transfer_id}, error={error}")
             self.sio.emit("error", {"message": error}, to=sid)
             return
         
         if not is_complete:
+            logging.debug(f"[FILE TRANSFER] WAITING: transfer_id={transfer_id}, "
+                         f"chunk_index={chunk_index}")
             return  # Wait for more chunks
         
         # File complete - broadcast to recipients
+        logging.info(f"[FILE TRANSFER] COMPLETE: transfer_id={transfer_id}, "
+                    f"file_path={file_path}, ready to broadcast")
         self._broadcast_file(transfer_id, file_path, sender_username)
     
     def _broadcast_file(self, transfer_id, file_path, sender_username):
