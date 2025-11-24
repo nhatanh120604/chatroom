@@ -4,12 +4,12 @@ from PySide6.QtCore import QObject, Signal, Slot, Property
 from .connection_manager import ConnectionManager
 from .session_manager import SessionManager
 from .state_manager import StateManager
-from client.handlers.message_handler import MessageHandler
-from client.handlers.file_handler import FileHandler
-from client.handlers.typing_handler import TypingHandler
-from client.handlers.avatar_handler import AvatarHandler
-from client.handlers.socket_manager import SocketManager
-from client.utils.validators import FileValidator
+from ..handlers.message_handler import MessageHandler
+from ..handlers.file_handler import FileHandler
+from ..handlers.typing_handler import TypingHandler
+from ..handlers.avatar_handler import AvatarHandler
+from ..handlers.socket_manager import SocketManager
+from ..utils.validators import FileValidator
 
 
 class ChatClient(QObject):
@@ -25,8 +25,8 @@ class ChatClient(QObject):
     privateMessageRead = Signal(int)
     publicTypingReceived = Signal(str, bool)
     privateTypingReceived = Signal(str, bool)
-    usersUpdated = Signal(object)
-    avatarsUpdated = Signal(object)
+    usersUpdated = Signal(list)  # Explicitly list type for QML compatibility
+    avatarsUpdated = Signal(dict)  # Explicitly dict type for QML compatibility
     avatarUpdated = Signal(str, object)
     disconnected = Signal(bool)
     reconnecting = Signal(int)
@@ -128,9 +128,23 @@ class ChatClient(QObject):
         self._avatar_handler.errorNotification.connect(self.errorReceived)
         
         # State manager
-        self._state_manager.usersUpdated.connect(self.usersUpdated)
-        self._state_manager.avatarsUpdated.connect(self.avatarsUpdated)
-        self._state_manager.avatarUpdated.connect(self.avatarUpdated)
+        try:
+            self._state_manager.usersUpdated.connect(self.usersUpdated)
+            print("[ChatClient] Connected usersUpdated signal")
+        except Exception as e:
+            print(f"[ChatClient] Failed to connect usersUpdated: {e}")
+        
+        try:
+            self._state_manager.avatarsUpdated.connect(self.avatarsUpdated)
+            print("[ChatClient] Connected avatarsUpdated signal")
+        except Exception as e:
+            print(f"[ChatClient] Failed to connect avatarsUpdated: {e}")
+        
+        try:
+            self._state_manager.avatarUpdated.connect(self.avatarUpdated)
+            print("[ChatClient] Connected avatarUpdated signal")
+        except Exception as e:
+            print(f"[ChatClient] Failed to connect avatarUpdated: {e}")
     
     def _setup_socket_handlers(self):
         """Setup SocketIO event handlers."""
@@ -171,7 +185,13 @@ class ChatClient(QObject):
             username = data.get("username", "Unknown")
             message = data.get("message", "")
             timestamp = data.get("timestamp", "")
-            file_payload = data.get("file") if isinstance(data.get("file"), dict) else {}
+            
+            # Debug: Log the raw file data
+            raw_file = data.get("file")
+            print(f"[ChatClient] on_message raw_file type={type(raw_file)}, value={raw_file}")
+            
+            file_payload = data.get("file") if isinstance(data.get("file"), dict) and len(data.get("file", {})) > 0 else None
+            print(f"[ChatClient] on_message file_payload after check: {file_payload}")
             
             self.messageReceived.emit(username, message, file_payload)
             self.messageReceivedEx.emit(username, message, file_payload, timestamp)
@@ -184,7 +204,7 @@ class ChatClient(QObject):
                 data.get("message", ""),
                 int(data.get("message_id", 0)),
                 data.get("status", ""),
-                data.get("file") if isinstance(data.get("file"), dict) else {},
+                data.get("file") if isinstance(data.get("file"), dict) and len(data.get("file", {})) > 0 else None,
                 data.get("timestamp", "")
             )
         
@@ -196,7 +216,7 @@ class ChatClient(QObject):
                 data.get("message", ""),
                 int(data.get("message_id", 0)),
                 data.get("status", ""),
-                data.get("file") if isinstance(data.get("file"), dict) else {},
+                data.get("file") if isinstance(data.get("file"), dict) and len(data.get("file", {})) > 0 else None,
                 data.get("timestamp", "")
             )
         
@@ -225,17 +245,23 @@ class ChatClient(QObject):
         
         @sio.on("update_user_list")
         def on_update_user_list(data):
-            users = data.get("users", [])
-            avatars = data.get("avatars", {})
-            
-            self._state_manager.update_users(users)
-            self._state_manager.update_avatars(avatars)
-            
-            # Update username if in list
-            if self._desired_username and self._desired_username in users:
-                self._set_username(self._desired_username)
-            elif self._username and self._username not in users:
-                self._set_username("")
+            try:
+                users = data.get("users", [])
+                avatars = data.get("avatars", {})
+                
+                print(f"[ChatClient] on_update_user_list: users type={type(users)}, count={len(users) if users else 0}")
+                self._state_manager.update_users(users)
+                self._state_manager.update_avatars(avatars)
+                
+                # Update username if in list
+                if self._desired_username and self._desired_username in users:
+                    self._set_username(self._desired_username)
+                elif self._username and self._username not in users:
+                    self._set_username("")
+            except Exception as e:
+                print(f"[ChatClient] Error in on_update_user_list: {e}")
+                import traceback
+                traceback.print_exc()
         
         @sio.on("avatar_update")
         def on_avatar_update(data):
@@ -265,14 +291,6 @@ class ChatClient(QObject):
                     self._set_username("")
                 self._desired_username = ""
     
-    def _on_disconnected(self, user_requested: bool):
-        """Handle disconnection."""
-        self._state_manager.clear()
-        self._typing_handler.reset()
-        self._set_username("")
-        self._pending_events.clear()
-        self.disconnected.emit(user_requested)
-    
     def _emit_when_connected(self, event: str, data: dict):
         """Emit event when connected, otherwise queue."""
         if self._connection_manager.connected:
@@ -280,9 +298,11 @@ class ChatClient(QObject):
                 self._socket_manager.emit(event, data)
             except Exception as e:
                 print(f"[ChatClient] Failed to emit '{event}': {e}")
-                self.errorReceived.emit(
-                    "Unable to send message. Please check your connection."
-                )
+                # Don't emit error for typing events as they're not critical
+                if event != "typing":
+                    self.errorReceived.emit(
+                        "Unable to send message. Please check your connection."
+                    )
         else:
             self._pending_events.append((event, data))
             self._connection_manager.connect_async(
@@ -293,7 +313,6 @@ class ChatClient(QObject):
     
     def _flush_pending_events(self):
         """Flush queued events after connection."""
-        # Add register if needed
         if self._desired_username:
             has_register = any(evt == "register" for evt, _ in self._pending_events)
             if not has_register:
@@ -309,6 +328,10 @@ class ChatClient(QObject):
                 print(f"[ChatClient] Failed to send pending '{event}': {e}")
         
         self._pending_events.clear()
+    
+    def _on_disconnected(self, user_requested: bool):
+        """Handle disconnection."""
+        self._state_manager.clear()
     
     def _set_username(self, value: str):
         """Update username and notify UI."""
@@ -342,14 +365,19 @@ class ChatClient(QObject):
         
         if file_url:
             try:
+                print(f"[ChatClient] sendMessageWithAttachment: file_url={file_url}")
                 file_path = FileValidator.normalize_file_path(file_url)
                 if not file_path:
+                    print(f"[ChatClient] Failed to normalize file path from: {file_url}")
                     self.errorReceived.emit("Invalid file selection.")
                     return
+                
+                print(f"[ChatClient] Normalized file path: {file_path}")
                 
                 # Resolve and validate file exists
                 resolved = file_path.resolve(strict=True)
                 if not resolved.is_file():
+                    print(f"[ChatClient] Path is not a file: {resolved}")
                     self.errorReceived.emit("Selection is not a file.")
                     return
                 
@@ -357,10 +385,24 @@ class ChatClient(QObject):
                 file_data = resolved.read_bytes()
                 filename = resolved.name
                 
-                if text:
-                    self._message_handler.send_public_message(text)
+                print(f"[ChatClient] File loaded: filename={filename}, size={len(file_data)} bytes")
                 
-                self._file_handler.send_file_chunks(file_data, filename)
+                # Send file chunks first to get transfer_id
+                transfer_id = self._file_handler.send_file_chunks(file_data, filename)
+                print(f"[ChatClient] File transfer started: transfer_id={transfer_id}")
+                
+                # Create file payload for message
+                file_payload = {
+                    "transfer_id": transfer_id,
+                    "filename": filename,
+                    "size": len(file_data),
+                }
+                print(f"[ChatClient] File payload for message: {file_payload}")
+                
+                # Send message with file metadata
+                if text or transfer_id:
+                    self._message_handler.send_public_message(text, file_payload)
+                    print(f"[ChatClient] Message sent with file metadata")
             except FileNotFoundError:
                 print(f"[ChatClient] File not found: {file_url}")
                 self.errorReceived.emit("File not found.")
@@ -369,6 +411,8 @@ class ChatClient(QObject):
                 self.errorReceived.emit("Permission denied reading file.")
             except Exception as e:
                 print(f"[ChatClient] Failed to read file: {e}")
+                import traceback
+                traceback.print_exc()
                 self.errorReceived.emit("Failed to read file.")
         else:
             if not text:
@@ -391,14 +435,19 @@ class ChatClient(QObject):
         
         if file_url:
             try:
+                print(f"[ChatClient] sendPrivateMessageWithAttachment: file_url={file_url}, recipient={recip}")
                 file_path = FileValidator.normalize_file_path(file_url)
                 if not file_path:
+                    print(f"[ChatClient] Failed to normalize file path from: {file_url}")
                     self.errorReceived.emit("Invalid file selection.")
                     return
+                
+                print(f"[ChatClient] Normalized file path: {file_path}")
                 
                 # Resolve and validate file exists
                 resolved = file_path.resolve(strict=True)
                 if not resolved.is_file():
+                    print(f"[ChatClient] Path is not a file: {resolved}")
                     self.errorReceived.emit("Selection is not a file.")
                     return
                 
@@ -406,10 +455,24 @@ class ChatClient(QObject):
                 file_data = resolved.read_bytes()
                 filename = resolved.name
                 
-                if text:
-                    self._message_handler.send_private_message(recip, text)
+                print(f"[ChatClient] File loaded: filename={filename}, size={len(file_data)} bytes")
                 
-                self._file_handler.send_file_chunks(file_data, filename, recip)
+                # Send file chunks first to get transfer_id
+                transfer_id = self._file_handler.send_file_chunks(file_data, filename, recip)
+                print(f"[ChatClient] File transfer started: transfer_id={transfer_id}")
+                
+                # Create file payload for message
+                file_payload = {
+                    "transfer_id": transfer_id,
+                    "filename": filename,
+                    "size": len(file_data),
+                }
+                print(f"[ChatClient] File payload for message: {file_payload}")
+                
+                # Send message with file metadata
+                if text or transfer_id:
+                    self._message_handler.send_private_message(recip, text, file_payload)
+                    print(f"[ChatClient] Private message sent with file metadata")
             except FileNotFoundError:
                 print(f"[ChatClient] File not found: {file_url}")
                 self.errorReceived.emit("File not found.")
@@ -418,6 +481,8 @@ class ChatClient(QObject):
                 self.errorReceived.emit("Permission denied reading file.")
             except Exception as e:
                 print(f"[ChatClient] Failed to read file: {e}")
+                import traceback
+                traceback.print_exc()
                 self.errorReceived.emit("Failed to read file.")
         else:
             if not text:
@@ -425,49 +490,73 @@ class ChatClient(QObject):
                 return
             self._message_handler.send_private_message(recip, text)
     
-    @Slot(str, result=object)
+    @Slot(str, result=dict)
     def inspectFile(self, file_url: str):
         """Inspect file and return metadata without reading content."""
         try:
+            print(f"[ChatClient] inspectFile called with: {file_url}")
+            
             file_path = FileValidator.normalize_file_path(file_url)
             if not file_path:
+                print(f"[ChatClient] Failed to normalize file path from: {file_url}")
                 self.errorReceived.emit("Invalid file selection.")
+                print(f"[ChatClient] Returning empty dict")
                 return {}
+            
+            print(f"[ChatClient] Normalized file path: {file_path}")
             
             # Only validate file exists and get metadata, don't read content
             try:
                 resolved = file_path.resolve(strict=True)
-            except (OSError, RuntimeError):
+            except (OSError, RuntimeError) as e:
+                print(f"[ChatClient] Failed to resolve file path: {e}")
                 self.errorReceived.emit("File not found.")
+                print(f"[ChatClient] Returning empty dict")
                 return {}
             
+            print(f"[ChatClient] Resolved file path: {resolved}")
+            
             if not resolved.is_file():
+                print(f"[ChatClient] Path is not a file: {resolved}")
                 self.errorReceived.emit("Selection is not a file.")
+                print(f"[ChatClient] Returning empty dict")
                 return {}
             
             try:
                 size = resolved.stat().st_size
-            except OSError:
+            except OSError as e:
+                print(f"[ChatClient] Cannot access file stats: {e}")
                 self.errorReceived.emit("Cannot access file.")
+                print(f"[ChatClient] Returning empty dict")
                 return {}
             
+            print(f"[ChatClient] File size: {size} bytes")
+            
             if size <= 0 or size > 5 * 1024 * 1024:  # 5 MB limit
+                print(f"[ChatClient] File size out of range: {size}")
                 self.errorReceived.emit("File must be between 1 byte and 5 MB.")
+                print(f"[ChatClient] Returning empty dict")
                 return {}
             
             import mimetypes
             mime, _ = mimetypes.guess_type(str(resolved))
             mime = mime or "application/octet-stream"
             
-            return {
+            result = {
                 "path": str(resolved),
                 "name": resolved.name,
                 "size": size,
                 "mime": mime,
             }
+            print(f"[ChatClient] inspectFile result: {result}")
+            print(f"[ChatClient] Returning result dict with keys: {list(result.keys())}")
+            return result
         except Exception as e:
             print(f"[ChatClient] Error inspecting file: {e}")
+            import traceback
+            traceback.print_exc()
             self.errorReceived.emit("Error inspecting file.")
+            print(f"[ChatClient] Returning empty dict due to exception")
             return {}
 
     @Slot(bool)

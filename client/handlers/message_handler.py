@@ -1,7 +1,18 @@
 from typing import Optional, Dict, List
 import base64
+import logging
 from PySide6.QtCore import QObject, Signal
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
+
+# Import encryption with error handling
+try:
+    from .encryption import aes_encrypt
+    logger.debug("[MessageHandler] Successfully imported aes_encrypt")
+except ImportError as e:
+    logger.error(f"[MessageHandler] Failed to import aes_encrypt: {e}")
+    raise
 
 
 class MessageHandler(QObject):
@@ -24,15 +35,26 @@ class MessageHandler(QObject):
     def send_public_message(self, text: str, file_payload: Optional[Dict] = None):
         """Send encrypted public message."""
         try:
-            from ..network.encryption import aes_encrypt
             
-            if not self._session_manager.session_key:
+            session_key = self._session_manager.session_key
+            if not session_key:
                 raise ValueError("Session key not established")
             
-            ciphertext, iv = aes_encrypt(
-                text.encode("utf-8"),
-                self._session_manager.session_key
-            )
+            # Validate session key type
+            if not isinstance(session_key, bytes):
+                logger.error(f"[MessageHandler] Invalid session key type: {type(session_key)}, expected bytes")
+                raise TypeError(f"Session key must be bytes, got {type(session_key).__name__}")
+            
+            logger.debug(f"[MessageHandler] Using session key of length {len(session_key)} bytes")
+            
+            try:
+                ciphertext, iv = aes_encrypt(
+                    text.encode("utf-8"),
+                    session_key
+                )
+            except Exception as e:
+                logger.error(f"[MessageHandler] Encryption failed in send_public_message: {e}", exc_info=True)
+                raise
             
             payload = {
                 "enc": True,
@@ -40,9 +62,11 @@ class MessageHandler(QObject):
                 "iv": base64.b64encode(iv).decode("utf-8"),
             }
             
-            if file_payload:
+            if file_payload is not None:
                 payload["file"] = file_payload
+                logger.debug(f"[MessageHandler] Adding file payload to message: {file_payload}")
             
+            logger.debug(f"[MessageHandler] Sending message payload with keys: {list(payload.keys())}")
             self._emit("message", payload)
             
         except Exception as e:
@@ -57,15 +81,25 @@ class MessageHandler(QObject):
     ):
         """Send encrypted private message."""
         try:
-            from ..network.encryption import aes_encrypt
-            
-            if not self._session_manager.session_key:
+            session_key = self._session_manager.session_key
+            if not session_key:
                 raise ValueError("Session key not established")
             
-            ciphertext, iv = aes_encrypt(
-                text.encode("utf-8"),
-                self._session_manager.session_key
-            )
+            # Validate session key type
+            if not isinstance(session_key, bytes):
+                logger.error(f"[MessageHandler] Invalid session key type: {type(session_key)}, expected bytes")
+                raise TypeError(f"Session key must be bytes, got {type(session_key).__name__}")
+            
+            logger.debug(f"[MessageHandler] Using session key of length {len(session_key)} bytes")
+            
+            try:
+                ciphertext, iv = aes_encrypt(
+                    text.encode("utf-8"),
+                    session_key
+                )
+            except Exception as e:
+                logger.error(f"[MessageHandler] Encryption failed in send_private_message: {e}", exc_info=True)
+                raise
             
             payload = {
                 "recipient": recipient,
@@ -74,8 +108,9 @@ class MessageHandler(QObject):
                 "iv": base64.b64encode(iv).decode("utf-8"),
             }
             
-            if file_payload:
+            if file_payload is not None:
                 payload["file"] = file_payload
+                logger.debug(f"[MessageHandler] Adding file payload to private message: {file_payload}")
             
             self._emit("private_message", payload)
             

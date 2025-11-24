@@ -1,9 +1,20 @@
 import base64
+import logging
 from typing import Optional, Tuple, List
 from PySide6.QtCore import QObject, Signal
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.backends import default_backend
+
+logger = logging.getLogger(__name__)
+
+# Import encryption with error handling
+try:
+    from ..handlers.encryption import generate_aes_key, rsa_encrypt_with_server_public_key
+    logger.debug("[SessionManager] Successfully imported encryption functions")
+except ImportError as e:
+    logger.error(f"[SessionManager] Failed to import encryption functions: {e}")
+    raise           
 
 
 class SessionManager(QObject):
@@ -29,15 +40,25 @@ class SessionManager(QObject):
     def generate_and_exchange(self, server_url: str) -> Optional[str]:
         """Generate AES key and encrypt with server's public key."""
         try:
-            from ..network.encryption import generate_aes_key, rsa_encrypt_with_server_public_key
+            logger.debug("[SessionManager] Starting key generation")
+            try:
+                self._session_aes_key = generate_aes_key()
+                logger.debug("[SessionManager] AES key generated successfully")
+            except Exception as e:
+                logger.error(f"[SessionManager] Failed to generate AES key: {e}", exc_info=True)
+                raise
             
-            self._session_aes_key = generate_aes_key()
-            encrypted = rsa_encrypt_with_server_public_key(
-                self._session_aes_key, server_url
-            )
-            return encrypted
+            try:
+                encrypted = rsa_encrypt_with_server_public_key(
+                    self._session_aes_key, server_url
+                )
+                logger.debug("[SessionManager] RSA encryption successful")
+                return encrypted
+            except Exception as e:
+                logger.error(f"[SessionManager] Failed to encrypt with server public key: {e}", exc_info=True)
+                raise
         except Exception as e:
-            print(f"[SessionManager] Key exchange failed: {e}")
+            logger.error(f"[SessionManager] Key exchange failed: {e}", exc_info=True)
             self.sessionError.emit(str(e))
             return None
     

@@ -34,15 +34,27 @@ class MessageHandler:
         """Handle public message."""
         sender_username = self.user_service.get_username(sid)
         
+        # Debug: Log incoming data
+        logging.info(f"[MESSAGE] on_message received data keys: {list(data.keys())}")
+        logging.info(f"[MESSAGE] on_message data['file'] value: {data.get('file')}")
+        
         # Decrypt if encrypted
         file_payload = None
         if data.get("enc"):
             message_text = self._decrypt_message(sid, data)
             if message_text is None:
                 return
+            # Extract file payload from encrypted message
+            logging.info(f"[MESSAGE] Before sanitize: data.get('file') = {data.get('file')}")
+            file_payload = sanitize_file_payload(data.get("file"))
+            logging.info(f"[MESSAGE] After sanitize: file_payload = {file_payload}")
+            if file_payload:
+                logging.info(f"[MESSAGE] Public message with file from {sender_username}: {file_payload}")
         else:
             message_text = data.get("message")
             file_payload = sanitize_file_payload(data.get("file"))
+            if file_payload:
+                logging.info(f"[MESSAGE] Public message with file from {sender_username}: {file_payload}")
         
         # Validate message
         is_valid, result = validate_message(message_text, file_payload)
@@ -59,12 +71,20 @@ class MessageHandler:
             "message": message_text,
             "timestamp": server_ts,
         }
-        if file_payload:
+        if file_payload is not None:
             broadcast_data["file"] = file_payload
+            logging.info(f"[MESSAGE] Broadcasting public message with file: {file_payload}")
+        
+        # Debug: Log what's being emitted
+        logging.info(f"[MESSAGE] broadcast_data keys: {list(broadcast_data.keys())}")
+        logging.info(f"[MESSAGE] broadcast_data['file'] before emit: {broadcast_data.get('file')}")
         
         # Add to history and broadcast
         self.history_service.add_message(broadcast_data)
         self.sio.emit("message", broadcast_data)
+        
+        # Debug: Log after emit
+        logging.info(f"[MESSAGE] Emitted message event with file: {broadcast_data.get('file')}")
     
     def on_private_message(self, sid, data):
         """Handle private message."""
@@ -93,9 +113,15 @@ class MessageHandler:
             message = self._decrypt_message(sid, data)
             if message is None:
                 return
+            # Extract file payload from encrypted message
+            file_payload = sanitize_file_payload(data.get("file"))
+            if file_payload:
+                logging.info(f"[MESSAGE] Private message with file from {sender_username} to {recipient_username}: {file_payload}")
         else:
             message = data.get("message")
             file_payload = sanitize_file_payload(data.get("file"))
+            if file_payload:
+                logging.info(f"[MESSAGE] Private message with file from {sender_username} to {recipient_username}: {file_payload}")
         
         # Validate message
         is_valid, result = validate_message(message, file_payload)
@@ -134,9 +160,10 @@ class MessageHandler:
         recipient_payload = dict(base_payload, status="delivered")
         sender_payload = dict(base_payload, status="sent")
         
-        if file_payload:
+        if file_payload is not None:
             recipient_payload["file"] = file_payload
             sender_payload["file"] = file_payload
+            logging.info(f"[MESSAGE] Broadcasting private message with file to {recipient_username}")
         
         # Send to both parties
         self.sio.emit("private_message_received", recipient_payload, to=recipient_sid)

@@ -92,41 +92,58 @@ class FileTransferService:
         if not session_key:
             raise ValueError("Session key required for decryption")
         
+        # Get filename early for logging
+        filename = transfer.get("metadata", {}).get("filename", "unknown")
+        logging.info(f"[FILE TRANSFER] DECRYPT START: transfer_id={transfer_id}, filename={filename}")
+        
         iv_b64 = transfer.get("iv", "")
         if not iv_b64:
             raise ValueError("IV not found in transfer metadata")
         
-        iv = base64.b64decode(iv_b64)
+        try:
+            iv = base64.b64decode(iv_b64)
+        except Exception as e:
+            logging.error(f"[FILE TRANSFER] IV DECODE FAILED: transfer_id={transfer_id}, error={e}")
+            raise
         
         # Reassemble ciphertext from chunks
         chunks_dict = transfer["encrypted_chunks"]
         num_chunks = len(chunks_dict)
         ciphertext = b"".join(chunks_dict[i] for i in sorted(chunks_dict.keys()))
         
-        logging.info(f"[FILE TRANSFER] DECRYPT: transfer_id={transfer_id}, "
+        logging.info(f"[FILE TRANSFER] DECRYPT: transfer_id={transfer_id}, filename={filename}, "
                     f"chunks={num_chunks}, ciphertext_size={len(ciphertext)} bytes")
+        
+        # Validate session key type
+        if not isinstance(session_key, bytes):
+            logging.error(f"[FILE TRANSFER] Invalid session key type: {type(session_key)}, expected bytes")
+            raise TypeError(f"Session key must be bytes, got {type(session_key).__name__}")
+        
+        logging.debug(f"[FILE TRANSFER] Using session key of length {len(session_key)} bytes")
         
         # Decrypt using encryption service
         try:
             plaintext = self.encryption_service.aes_decrypt(ciphertext, session_key, iv)
-            logging.info(f"[FILE TRANSFER] DECRYPT SUCCESS: transfer_id={transfer_id}, "
+            logging.info(f"[FILE TRANSFER] DECRYPT SUCCESS: transfer_id={transfer_id}, filename={filename}, "
                         f"plaintext_size={len(plaintext)} bytes")
         except Exception as e:
-            logging.error(f"[FILE TRANSFER] DECRYPT FAILED: transfer_id={transfer_id}, error={e}")
+            logging.error(f"[FILE TRANSFER] DECRYPT FAILED: transfer_id={transfer_id}, filename={filename}, error={e}", exc_info=True)
             raise
         
         # Save to disk
-        filename = transfer["metadata"].get("filename", "file")
         safe_name = os.path.basename(filename) or "file"
         out_path = os.path.join(Config.UPLOAD_DIR, f"{transfer_id}_{safe_name}")
+        
+        logging.debug(f"[FILE TRANSFER] SAVE PATH: transfer_id={transfer_id}, path={out_path}")
         
         try:
             with open(out_path, "wb") as f:
                 f.write(plaintext)
-            logging.info(f"[FILE TRANSFER] SAVED: transfer_id={transfer_id}, "
+            logging.info(f"[FILE TRANSFER] SAVED: transfer_id={transfer_id}, filename={filename}, "
                         f"path={out_path}, size={len(plaintext)} bytes")
         except Exception as e:
-            logging.error(f"[FILE TRANSFER] SAVE FAILED: transfer_id={transfer_id}, error={e}")
+            logging.error(f"[FILE TRANSFER] SAVE FAILED: transfer_id={transfer_id}, filename={filename}, "
+                         f"path={out_path}, error={e}", exc_info=True)
             raise
         
         return out_path

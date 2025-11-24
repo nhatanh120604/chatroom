@@ -1,12 +1,15 @@
+import logging
 from typing import List, Dict, Any
 from PySide6.QtCore import QObject, Signal
+
+logger = logging.getLogger(__name__)
 
 
 class StateManager(QObject):
     """Manages application state (users, avatars, etc.)."""
     
-    usersUpdated = Signal(object)  # list of usernames
-    avatarsUpdated = Signal(object)  # dict of avatars
+    usersUpdated = Signal(list)  # list of usernames - explicitly list type
+    avatarsUpdated = Signal(dict)  # dict of avatars - explicitly dict type
     avatarUpdated = Signal(str, object)  # username, avatar
     
     def __init__(self):
@@ -24,8 +27,14 @@ class StateManager(QObject):
     
     def update_users(self, users: List[str]):
         """Update user list."""
-        self._users = users
-        self.usersUpdated.emit(self._users.copy())
+        try:
+            self._users = users if isinstance(users, list) else list(users) if users else []
+            user_list = self._users.copy()
+            logger.debug(f"[StateManager] Emitting usersUpdated with {len(user_list)} users: {user_list}")
+            self.usersUpdated.emit(user_list)
+        except Exception as e:
+            logger.error(f"[StateManager] Error in update_users: {e}", exc_info=True)
+            self.usersUpdated.emit([])
     
     def update_avatars(self, avatars: Dict[str, Dict[str, Any]]):
         """Update all avatars."""

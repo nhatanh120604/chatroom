@@ -123,6 +123,21 @@ ColumnLayout {
                     width: messageColumn.width
                     isFirst: index === 0
                     
+                    // Bind required properties from model
+                    user: model.user || ""
+                    text: model.text || ""
+                    timestamp: model.timestamp || ""
+                    isPrivate: model.isPrivate || false
+                    isOutgoing: model.isOutgoing || false
+                    displayContext: model.displayContext || (model.user || "")
+                    status: model.status || ""
+                    
+                    // Bind file properties from model
+                    fileName: model.fileName || ""
+                    fileSize: model.fileSize || 0
+                    fileData: model.fileData || ""
+                    fileMime: model.fileMime || ""
+                    
                     onDownloadRequested: {
                         console.log("Download requested:", fileName)
                     }
