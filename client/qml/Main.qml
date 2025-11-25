@@ -1,56 +1,31 @@
+/**
+ * Main.qml - Orchestration File
+ * 
+ * This file serves as the main entry point for the Aurora Chat application.
+ * It imports and delegates to Main_1.qml which contains the full ApplicationWindow implementation.
+ * 
+ * Architecture:
+ * ├── styles/Theme.qml - Global theme and design system (singleton)
+ * ├── components/ - Reusable UI components
+ * │   ├── MessageBubble.qml - Message display with file support
+ * │   ├── Composer.qml - Message input with file attachment
+ * │   ├── FileAttachment.qml - File display and download
+ * │   ├── Header.qml - Application header
+ * │   ├── Avatar.qml - User avatar display
+ * │   ├── Toast.qml - Notification toasts
+ * │   └── ... other components
+ * ├── pages/ - Full page views
+ * │   ├── PublicChatPage.qml - Public chat interface
+ * │   └── PrivateChatPage.qml - Private chat interface
+ * └── Main_1.qml - Main ApplicationWindow with state management
+ */
+
 import QtQuick 2.15
-import QtQuick.Controls 2.15
-import QtQuick.Layouts 1.15
-import QtQuick.Effects 6.6
-import QtMultimedia
-import Qt.labs.platform 1.1 as Platform
 
-
-ApplicationWindow {
+// Import and use the main application window
+Main_1 {
     id: window
-    visible: true
-    width: 920
-    height: 600
-    title: "Aurora Chat"
-    color: palette.window
-
-    readonly property var palette: ({
-        window: "#090C12",
-        gradientTop: "#111927",
-        gradientBottom: "#07090D",
-        panel: "#121A26",
-        surface: "#152033",
-        card: "#1A2738",
-        canvas: "#1F2D40",
-        accent: "#E0C184",
-        accentSoft: "#26E0C184",
-        accentBold: "#F3DCA3",
-        textPrimary: "#F4F7FB",
-        textSecondary: "#A5AEC1",
-        outline: "#222E42",
-        success: "#35A57C",
-        warning: "#CE6C6C"
-    })
-
-    readonly property var avatarDefaultColors: ({ top: "#6DE5AE", bottom: "#2C9C6D" })
-
-    readonly property real fontScale: 1.12
-    function scaleFont(size) {
-        return Math.round(size * fontScale)
-    }
-    readonly property string emojiFontFamily: Qt.platform.os === "windows"
-                                             ? "Segoe UI Emoji"
-                                             : (Qt.platform.os === "osx"
-                                                ? "Apple Color Emoji"
-                                                : "Noto Color Emoji, Noto Emoji, Symbola, DejaVu Sans")
-
-    property var activeDownloads: ({})  // transfer_id -> {progress, filename}
-
-    // Add this function to track download progress
-    function updateDownloadProgress(transferId, current, total) {
-        var snapshot = Object.assign({}, activeDownloads)
-        if (current >= total && total > 0) {
-            // Download complete, will be removed by onFileTransferComplete
+}
             if (snapshot[transferId]) {
                 snapshot[transferId].progress = 1.0
             }
@@ -1900,6 +1875,7 @@ ApplicationWindow {
                                     return
                                 }
                                 chatClient.sendMessageWithAttachment(text, pendingPath)
+                                console.log("[QML] sendMessageWithAttachment: text=" + text + ", file_url=" + pendingPath)
                                 if (text.length > 0 || pendingPath.length > 0) {
                                     messageField.text = ""
                                     window.publicDraft = ""
@@ -2792,7 +2768,7 @@ ApplicationWindow {
                                     onClicked: {
                                         console.log("[QML] Download clicked for:", model.fileName)
                                         
-                                        // For chunked transfers, file is already saved during transfer
+                                        // For chunked transfers, retrieve from file handler and save
                                         // For inline transfers, use fileData
                                         var result = ""
                                         if (model.fileData && model.fileData.length > 0) {
@@ -2802,9 +2778,13 @@ ApplicationWindow {
                                                 model.fileData,
                                                 model.fileMime || "application/octet-stream"
                                             )
+                                        } else if (model.transferId && model.transferId.length > 0) {
+                                            console.log("[QML] Downloading chunked file with transfer_id:", model.transferId)
+                                            // For chunked transfers, call Python to retrieve and save
+                                            result = chatClient.downloadReceivedFile(model.transferId, model.fileName)
                                         } else {
-                                            console.log("[QML] File already transferred (chunked):", model.fileName)
-                                            result = model.fileName
+                                            console.log("[QML] No file data available for:", model.fileName)
+                                            result = ""
                                         }
 
                                         // Add system message to the correct conversation
@@ -3049,6 +3029,7 @@ ApplicationWindow {
                 // This is a private file payload; it will be handled by private handlers
                 return
             }
+            
             messagesModel.append({
                 "user": username,
                 "text": message,
@@ -3057,6 +3038,7 @@ ApplicationWindow {
                 "fileMime": file && file.mime ? file.mime : "",
                 "fileData": file && file.data ? file.data : "",
                 "fileSize": file && file.size ? Number(file.size) : 0,
+                "transferId": file && file.transfer_id ? file.transfer_id : "",
                 "timestamp": formatTimestamp("")
             })
             window.updatePublicTyping(username, false)
@@ -3093,6 +3075,7 @@ ApplicationWindow {
                     "fileMime": entry.file && entry.file.mime ? entry.file.mime : "",
                     "fileData": entry.file && entry.file.data ? entry.file.data : "",
                     "fileSize": entry.file && entry.file.size ? Number(entry.file.size) : 0,
+                    "transferId": entry.file && entry.file.transfer_id ? entry.file.transfer_id : "",
                     "timestamp": formatTimestamp(entry.timestamp ? entry.timestamp : "")
                 })
             }
@@ -3224,7 +3207,8 @@ ApplicationWindow {
                     "fileName": "",
                     "fileMime": "",
                     "fileData": "",
-                    "fileSize": 0
+                    "fileSize": 0,
+                    "transferId": ""
                 })
             } else {
                 messagesModel.append({
@@ -3234,7 +3218,8 @@ ApplicationWindow {
                     "fileName": "",
                     "fileMime": "",
                     "fileData": "",
-                    "fileSize": 0
+                    "fileSize": 0,
+                    "transferId": ""
                 })
             }
 
@@ -3251,7 +3236,8 @@ ApplicationWindow {
                 "fileName": "",
                 "fileMime": "",
                 "fileData": "",
-                "fileSize": 0
+                "fileSize": 0,
+                "transferId": ""
             })
             var page = window.conversationPages["public"]
             if (page && page.scrollToEnd) {
@@ -3268,7 +3254,8 @@ ApplicationWindow {
                 "fileName": "",
                 "fileMime": "",
                 "fileData": "",
-                "fileSize": 0
+                "fileSize": 0,
+                "transferId": ""
             })
             var page = window.conversationPages["public"]
             if (page && page.scrollToEnd) {
@@ -3284,7 +3271,8 @@ ApplicationWindow {
                 "fileName": "",
                 "fileMime": "",
                 "fileData": "",
-                "fileSize": 0
+                "fileSize": 0,
+                "transferId": ""
             })
             var idx = window.conversationIndex("public")
             var isActive = idx === conversationTabBar.currentIndex
@@ -3322,7 +3310,15 @@ ApplicationWindow {
         }
 
         function onFileTransferComplete(transferId, filename) {
-            console.log("[QML] File transfer complete:", transferId, filename)
+            console.log("[QML] File transfer complete:", transferId, "filename:", filename)
+            
+            // File is now ready to download - store transfer_id for later download
+            if (!window.completedTransfers) {
+                window.completedTransfers = {}
+            }
+            window.completedTransfers[transferId] = true
+            console.log("[QML] Marked transfer as complete:", transferId)
+            
             window.clearDownload(transferId)
             // File is now available in the message, user can click download button
         }
@@ -3340,6 +3336,7 @@ ApplicationWindow {
                 "fileMime": "",
                 "fileData": "",
                 "fileSize": 0,
+                "transferId": "",
                 "timestamp": formatTimestamp("")
             })
         }

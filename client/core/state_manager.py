@@ -10,7 +10,7 @@ class StateManager(QObject):
     
     usersUpdated = Signal(list)  # list of usernames - explicitly list type
     avatarsUpdated = Signal(dict)  # dict of avatars - explicitly dict type
-    avatarUpdated = Signal(str, object)  # username, avatar
+    avatarUpdated = Signal(str, "QVariant")  # username, avatar
     
     def __init__(self):
         super().__init__()

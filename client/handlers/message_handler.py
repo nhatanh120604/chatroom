@@ -18,14 +18,14 @@ except ImportError as e:
 class MessageHandler(QObject):
     """Handles message sending and receiving."""
     
-    messageReceived = Signal(str, str, object)  # username, message, file
-    messageReceivedEx = Signal(str, str, object, str)  # + timestamp
-    privateMessageReceived = Signal(str, str, str, int, str, object)
-    privateMessageReceivedEx = Signal(str, str, str, int, str, object, str)
-    privateMessageSent = Signal(str, str, str, int, str, object)
-    privateMessageSentEx = Signal(str, str, str, int, str, object, str)
+    messageReceived = Signal(str, str, "QVariant")  # username, message, file
+    messageReceivedEx = Signal(str, str, "QVariant", str)  # + timestamp
+    privateMessageReceived = Signal(str, str, str, int, str, "QVariant")
+    privateMessageReceivedEx = Signal(str, str, str, int, str, "QVariant", str)
+    privateMessageSent = Signal(str, str, str, int, str, "QVariant")
+    privateMessageSentEx = Signal(str, str, str, int, str, "QVariant", str)
     privateMessageRead = Signal(int)
-    generalHistoryReceived = Signal(object)
+    generalHistoryReceived = Signal("QVariant")
     
     def __init__(self, session_manager, emit_callback):
         super().__init__()

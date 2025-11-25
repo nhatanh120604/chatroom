@@ -21,6 +21,7 @@ Column {
     property string fileMime: ""
     property string fileData: ""
     property int fileSize: 0
+    property string transferId: ""
     
     property bool isSystem: user === "System"
     property bool isFirst: false

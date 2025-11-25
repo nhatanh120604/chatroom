@@ -34,17 +34,17 @@ class FileHandler:
         if metadata:
             total_chunks = metadata.get("total_chunks", "?")
             filename = metadata.get("filename", "unknown")
-            logging.info(f"[FILE TRANSFER] START: transfer_id={transfer_id}, file={filename}, "
+            print(f"[FILE TRANSFER] START: transfer_id={transfer_id}, file={filename}, "
                         f"total_chunks={total_chunks}, type={'private' if is_private else 'public'}")
         else:
-            logging.debug(f"[FILE TRANSFER] CHUNK: transfer_id={transfer_id}, "
+            print(f"[FILE TRANSFER] CHUNK: transfer_id={transfer_id}, "
                          f"chunk_index={chunk_index}, is_last={is_last_chunk}")
         
         # Get session key for decryption
         session_key = self.user_service.get_session_key(sid)
         if not session_key:
             error_msg = "Session key not established"
-            logging.error(f"[FILE TRANSFER] ERROR: {error_msg} for {sender_username}")
+            print(f"[FILE TRANSFER] ERROR: {error_msg} for {sender_username}")
             self.sio.emit("error", {"message": error_msg}, to=sid)
             return
         
@@ -55,17 +55,17 @@ class FileHandler:
             )
         
         if not success:
-            logging.error(f"[FILE TRANSFER] ERROR: transfer_id={transfer_id}, error={error}")
+            print(f"[FILE TRANSFER] ERROR: transfer_id={transfer_id}, error={error}")
             self.sio.emit("error", {"message": error}, to=sid)
             return
         
         if not is_complete:
-            logging.debug(f"[FILE TRANSFER] WAITING: transfer_id={transfer_id}, "
+            print(f"[FILE TRANSFER] WAITING: transfer_id={transfer_id}, "
                          f"chunk_index={chunk_index}")
             return  # Wait for more chunks
         
         # File complete - broadcast to recipients
-        logging.info(f"[FILE TRANSFER] COMPLETE: transfer_id={transfer_id}, "
+        print(f"[FILE TRANSFER] COMPLETE: transfer_id={transfer_id}, "
                     f"file_path={file_path}, ready to broadcast")
         self._broadcast_file(transfer_id, file_path, sender_username)
     
@@ -73,7 +73,7 @@ class FileHandler:
         """Broadcast decrypted file to recipients."""
         transfer = self.file_transfer_service.get_transfer_info(transfer_id)
         if not transfer:
-            logging.warning(f"Transfer info not found for {transfer_id}")
+            print(f"Transfer info not found for {transfer_id}")
             return
         
         try:
@@ -101,7 +101,7 @@ class FileHandler:
             server_ts = datetime.now(timezone.utc).isoformat()
             
             # Stream file to recipient(s) in chunks
-            logging.info(f"Broadcasting file {transfer_id}: {filename} ({total_chunks} chunks)")
+            print(f"Broadcasting file {transfer_id}: {filename} ({total_chunks} chunks)")
             
             with open(file_path, "rb") as f:
                 for chunk_idx in range(total_chunks):
@@ -135,17 +135,17 @@ class FileHandler:
                     else:
                         self.sio.emit("file_chunk", payload)
             
-            logging.info(f"File broadcast complete: {transfer_id} ({total_chunks} chunks)")
+            print(f"File broadcast complete: {transfer_id} ({total_chunks} chunks)")
             
         except OSError as e:
-            logging.error(f"Failed to broadcast file {transfer_id}: {e}")
+            print(f"Failed to broadcast file {transfer_id}: {e}")
             self.sio.emit(
                 "error",
                 {"message": f"Server streaming error: {e}"},
                 to=transfer["sender_sid"]
             )
         except Exception as e:
-            logging.error(f"Unexpected error broadcasting file {transfer_id}: {e}")
+            print(f"Unexpected error broadcasting file {transfer_id}: {e}")
             self.sio.emit(
                 "error",
                 {"message": f"Server error: {e}"},
@@ -160,10 +160,10 @@ class FileHandler:
         self.file_transfer_service.cleanup_transfer(transfer_id)
         try:
             if file_path and os.path.exists(file_path):
-                os.remove(file_path)
-                logging.debug(f"Removed temporary file: {file_path}")
+                os.remove(file_path)    
+                print(f"Removed temporary file: {file_path}")
         except OSError as e:
-            logging.warning(f"Failed to remove temporary file {file_path}: {e}")
+            print(f"Failed to remove temporary file {file_path}: {e}")
     
     def on_file_transfer_ack(self, sid, data):
         """Handle file transfer acknowledgment from client."""
@@ -172,7 +172,7 @@ class FileHandler:
         error_msg = data.get("error", "")
         
         if not transfer_id:
-            logging.warning(f"File transfer ack missing transfer_id from {sid}")
+            print(f"File transfer ack missing transfer_id from {sid}")
             return
         
         transfer = self.file_transfer_service.get_transfer_info(transfer_id)
@@ -190,9 +190,9 @@ class FileHandler:
             )
             
             if success:
-                logging.info(f"File transfer {transfer_id} acknowledged successfully")
+                print(f"File transfer {transfer_id} acknowledged successfully")
             else:
-                logging.warning(f"File transfer {transfer_id} failed: {error_msg}")
+                print(f"File transfer {transfer_id} failed: {error_msg}")
         
         # Clean up transfer tracking
         self.file_transfer_service.cleanup_transfer(transfer_id)

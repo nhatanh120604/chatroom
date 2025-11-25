@@ -121,25 +121,56 @@ ColumnLayout {
                 id: listView
                 delegate: MessageBubble {
                     width: messageColumn.width
+                    
+                    // Declare index as required property from Repeater
+                    required property int index
+                    
+                    // Bind properties directly - index is now available
                     isFirst: index === 0
                     
+                    // Get model data - use index directly in binding
+                    property var msgModel: listView.model ? listView.model.get(index) : null
+                    
                     // Bind required properties from model
-                    user: model.user || ""
-                    text: model.text || ""
-                    timestamp: model.timestamp || ""
-                    isPrivate: model.isPrivate || false
-                    isOutgoing: model.isOutgoing || false
-                    displayContext: model.displayContext || (model.user || "")
-                    status: model.status || ""
+                    user: msgModel ? (msgModel.user || "") : ""
+                    text: msgModel ? (msgModel.text || "") : ""
+                    timestamp: msgModel ? (msgModel.timestamp || "") : ""
+                    isPrivate: msgModel ? (msgModel.isPrivate || false) : false
+                    isOutgoing: msgModel ? (msgModel.isOutgoing || false) : false
+                    displayContext: msgModel ? (msgModel.displayContext || (msgModel.user || "")) : ""
+                    status: msgModel ? (msgModel.status || "") : ""
                     
                     // Bind file properties from model
-                    fileName: model.fileName || ""
-                    fileSize: model.fileSize || 0
-                    fileData: model.fileData || ""
-                    fileMime: model.fileMime || ""
+                    fileName: msgModel ? (msgModel.fileName || "") : ""
+                    fileSize: msgModel ? (msgModel.fileSize || 0) : 0
+                    fileData: msgModel ? (msgModel.fileData || "") : ""
+                    fileMime: msgModel ? (msgModel.fileMime || "") : ""
+                    transferId: msgModel ? (msgModel.transferId || "") : ""
                     
-                    onDownloadRequested: {
-                        console.log("Download requested:", fileName)
+                    onDownloadRequested: function(tid, fname) {
+                        console.log("[QML] Download clicked for:", fname, "transferId:", tid)
+                        
+                        var result = ""
+                        if (fileData && fileData.length > 0) {
+                            console.log("[QML] Downloading inline file:", fname)
+                            result = chatClient.saveFileToDownloads(
+                                fname || "download",
+                                fileData,
+                                fileMime || "application/octet-stream"
+                            )
+                        } else if (tid && tid.length > 0) {
+                            console.log("[QML] Downloading chunked file with transfer_id:", tid)
+                            result = chatClient.downloadReceivedFile(tid, fname)
+                        } else {
+                            console.log("[QML] No file data available for:", fname)
+                            result = ""
+                        }
+                        
+                        if (result && result.length > 0) {
+                            window.showToast("File downloaded successfully", false)
+                        } else {
+                            window.showToast("Failed to download file", true)
+                        }
                     }
                     
                     onCopyTextRequested: function(text) {

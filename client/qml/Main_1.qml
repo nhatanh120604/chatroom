@@ -33,6 +33,7 @@ ApplicationWindow {
     property bool soundsEnabled: true
     property var lastSoundTime: new Date(0)
     property int soundDebounceMs: 500
+    property var activeDownloads: ({})  // transfer_id -> {progress, filename}
     
     // ========== MODELS ==========
     ListModel {
@@ -71,6 +72,84 @@ ApplicationWindow {
             soundEffect.play()
             lastSoundTime = now
         }
+    }
+    
+    function showToast(message, isError) {
+        console.log("[QML] showToast called:", message, "error:", isError)
+        if (toast) {
+            toast.show(message, isError || false)
+        } else {
+            console.error("[QML] toast not found!")
+        }
+    }
+    
+    function updateDownloadProgress(transferId, current, total) {
+        var snapshot = Object.assign({}, activeDownloads)
+        if (current >= total && total > 0) {
+            if (snapshot[transferId]) {
+                snapshot[transferId].progress = 1.0
+            }
+        } else if (total > 0) {
+            if (!snapshot[transferId]) {
+                snapshot[transferId] = {
+                    progress: 0,
+                    filename: "",
+                    current: current,
+                    total: total
+                }
+            }
+            snapshot[transferId].progress = current / total
+            snapshot[transferId].current = current
+            snapshot[transferId].total = total
+        }
+        activeDownloads = snapshot
+        logFileTransfer(transferId, snapshot[transferId].filename, "IN_PROGRESS", snapshot[transferId].progress)
+    }
+    
+    function clearDownload(transferId) {
+        var snapshot = Object.assign({}, activeDownloads)
+        delete snapshot[transferId]
+        activeDownloads = snapshot
+        logFileTransfer(transferId, "", "CANCELLED")
+    }
+    
+    // ========== LOGGING FUNCTIONS ==========
+    function logDebug(tag, message) {
+        console.log("[DEBUG] [" + tag + "] " + message)
+    }
+    
+    function logInfo(tag, message) {
+        console.log("[INFO] [" + tag + "] " + message)
+    }
+    
+    function logWarning(tag, message) {
+        console.warn("[WARN] [" + tag + "] " + message)
+    }
+    
+    function logError(tag, message) {
+        console.error("[ERROR] [" + tag + "] " + message)
+    }
+    
+    function logFileTransfer(transferId, fileName, status, progress) {
+        var msg = "Transfer: " + transferId + " | File: " + fileName + " | Status: " + status
+        if (progress !== undefined) {
+            msg += " | Progress: " + (progress * 100).toFixed(1) + "%"
+        }
+        logDebug("FileTransfer", msg)
+    }
+    
+    function logMessage(user, text, isPrivate, hasFile) {
+        var type = isPrivate ? "PRIVATE" : "PUBLIC"
+        var fileInfo = hasFile ? " [WITH FILE]" : ""
+        logDebug("Message", type + ": " + user + " - " + text.substring(0, 50) + fileInfo)
+    }
+    
+    function logConversation(action, peer) {
+        logDebug("Conversation", action + ": " + peer)
+    }
+    
+    function logState(property, value) {
+        logDebug("State", property + " = " + JSON.stringify(value).substring(0, 100))
     }
     
     function formatTimestamp(ts) {
@@ -116,6 +195,7 @@ ApplicationWindow {
     function openPrivateConversation(peer) {
         if (!peer || peer === chatClient.username) return
         
+        logConversation("OPEN", peer)
         ensurePrivateModel(peer)
         if (conversationIndex(peer) === -1) {
             conversationTabsModel.append({
@@ -125,11 +205,13 @@ ApplicationWindow {
                 "hasUnread": false,
                 "unreadCount": 0
             })
+            logInfo("Conversation", "Created new conversation with " + peer)
         }
         
         var idx = conversationIndex(peer)
         if (idx >= 0) {
             conversationTabBar.currentIndex = idx
+            logDebug("Conversation", "Switched to conversation index " + idx)
         }
     }
     
@@ -176,6 +258,9 @@ ApplicationWindow {
             })
         }
         
+        var hasFile = filePayload && (filePayload.data || filePayload.transfer_id)
+        logMessage(author || peer, text, true, hasFile)
+        
         model.append({
             "user": author || peer,
             "text": text || "",
@@ -184,10 +269,11 @@ ApplicationWindow {
             "isOutgoing": isOutgoing === true,
             "displayContext": isOutgoing === true ? "You" : author,
             "status": status || "sent",
-            "fileName": filePayload && filePayload.name ? filePayload.name : "",
+            "fileName": filePayload && filePayload.filename ? filePayload.filename : (filePayload && filePayload.name ? filePayload.name : ""),
             "fileMime": filePayload && filePayload.mime ? filePayload.mime : "",
             "fileData": filePayload && filePayload.data ? filePayload.data : "",
-            "fileSize": filePayload && filePayload.size ? Number(filePayload.size) : 0
+            "fileSize": filePayload && filePayload.size ? Number(filePayload.size) : 0,
+            "transferId": filePayload && filePayload.transfer_id ? String(filePayload.transfer_id) : ""
         })
         
         var idx = conversationIndex(peer)
@@ -195,6 +281,7 @@ ApplicationWindow {
         
         if (!isActive && isOutgoing !== true) {
             incrementConversationUnread(peer)
+            logDebug("Unread", "Incremented unread count for " + peer)
         }
         
         if (isOutgoing !== true) {
@@ -411,26 +498,29 @@ ApplicationWindow {
                                         Layout.fillWidth: true
                                         Layout.fillHeight: true
                                         
-                                        sourceComponent: model.isPrivate 
+                                        required property string key
+                                        required property string title
+                                        required property bool isPrivate
+                                        
+                                        sourceComponent: isPrivate 
                                             ? privateChatComponent 
                                             : publicChatComponent
                                         
                                         onLoaded: {
-                                            if (model.isPrivate) {
-                                                item.setup(model.key, model.title)
-                                                item.messagesModel = ensurePrivateModel(model.key)
+                                            if (isPrivate) {
+                                                item.setup(key, title)
+                                                item.messagesModel = ensurePrivateModel(key)
                                             } else {
                                                 item.setup()
                                                 item.messagesModel = messagesModel
                                             }
-                                            conversationPages[model.key] = item
+                                            conversationPages[key] = item
                                         }
                                     }
                                 }
                             }
                         }
                     }
-                }
                 
                 // User list panel
                 UserList {
@@ -535,10 +625,11 @@ ApplicationWindow {
                 "isOutgoing": false,
                 "displayContext": username,
                 "status": "",
-                "fileName": file && file.name ? file.name : "",
+                "fileName": file && file.filename ? file.filename : (file && file.name ? file.name : ""),
                 "fileMime": file && file.mime ? file.mime : "",
                 "fileData": file && file.data ? file.data : "",
-                "fileSize": file && file.size ? Number(file.size) : 0
+                "fileSize": file && file.size ? Number(file.size) : 0,
+                "transferId": file && file.transfer_id ? String(file.transfer_id) : ""
             })
             
             if (username !== chatClient.username) {
@@ -641,12 +732,21 @@ ApplicationWindow {
                     "isOutgoing": false,
                     "displayContext": entry.username || "Unknown",
                     "status": "",
-                    "fileName": entry.file && entry.file.name ? entry.file.name : "",
+                    "fileName": entry.file && entry.file.filename ? entry.file.filename : (entry.file && entry.file.name ? entry.file.name : ""),
                     "fileMime": entry.file && entry.file.mime ? entry.file.mime : "",
                     "fileData": entry.file && entry.file.data ? entry.file.data : "",
-                    "fileSize": entry.file && entry.file.size ? Number(entry.file.size) : 0
+                    "fileSize": entry.file && entry.file.size ? Number(entry.file.size) : 0,
+                    "transferId": entry.file && entry.file.transfer_id ? String(entry.file.transfer_id) : ""
                 })
             }
         }
     }
+    
+    // ========== MODELS ==========
+    ListModel {
+        id: conversationTabsModel
+        ListElement { key: "public"; title: "Salon feed"; isPrivate: false; hasUnread: false; unreadCount: 0 }
+    }
+    ListModel { id: messagesModel }
+    ListModel { id: usersModel }
 }

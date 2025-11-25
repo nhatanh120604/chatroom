@@ -1,4 +1,5 @@
 import os
+import json
 from typing import Optional
 from PySide6.QtCore import QObject, Signal, Slot, Property
 from .connection_manager import ConnectionManager
@@ -16,24 +17,24 @@ class ChatClient(QObject):
     """Main chat client orchestrator - coordinates all components."""
     
     # Forward signals from components
-    messageReceived = Signal(str, str, object)
-    messageReceivedEx = Signal(str, str, object, str)
-    privateMessageReceived = Signal(str, str, str, int, str, object)
-    privateMessageReceivedEx = Signal(str, str, str, int, str, object, str)
-    privateMessageSent = Signal(str, str, str, int, str, object)
-    privateMessageSentEx = Signal(str, str, str, int, str, object, str)
+    messageReceived = Signal(str, str, "QVariant")  # username, message, file payload
+    messageReceivedEx = Signal(str, str, "QVariant", str)  # username, message, file payload, timestamp
+    privateMessageReceived = Signal(str, str, str, int, str, "QVariant")  # sender, recipient, message, message_id, status, file payload
+    privateMessageReceivedEx = Signal(str, str, str, int, str, "QVariant", str)  # + timestamp
+    privateMessageSent = Signal(str, str, str, int, str, "QVariant")  # sender, recipient, message, message_id, status, file payload
+    privateMessageSentEx = Signal(str, str, str, int, str, "QVariant", str)  # + timestamp
     privateMessageRead = Signal(int)
     publicTypingReceived = Signal(str, bool)
     privateTypingReceived = Signal(str, bool)
     usersUpdated = Signal(list)  # Explicitly list type for QML compatibility
     avatarsUpdated = Signal(dict)  # Explicitly dict type for QML compatibility
-    avatarUpdated = Signal(str, object)
+    avatarUpdated = Signal(str, "QVariant")
     disconnected = Signal(bool)
     reconnecting = Signal(int)
     reconnected = Signal()
     errorReceived = Signal(str)
     usernameChanged = Signal(str)
-    generalHistoryReceived = Signal(object)
+    generalHistoryReceived = Signal("QVariant")
     fileTransferProgress = Signal(str, int, int)
     fileTransferComplete = Signal(str, str)
     fileTransferError = Signal(str, str)
@@ -87,6 +88,22 @@ class ChatClient(QObject):
             pass
         
         return url or os.environ.get("CHAT_SERVER_URL") or "http://localhost:5000"
+    
+    def _convert_dict_for_qml(self, obj):
+        """Convert Python dict to QML-compatible format via JSON serialization."""
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            try:
+                # Convert to JSON and back to ensure QML compatibility
+                json_str = json.dumps(obj)
+                result = json.loads(json_str)
+                print(f"[ChatClient] Converted dict for QML: {result}")
+                return result
+            except Exception as e:
+                print(f"[ChatClient] Failed to convert dict for QML: {e}")
+                return obj
+        return obj
     
     def _connect_signals(self):
         """Connect component signals to main signals."""
@@ -182,41 +199,103 @@ class ChatClient(QObject):
         
         @sio.on("message")
         def on_message(data):
+            # Log raw data received from server
+            print(f"[CLIENT] on_message RAW data type: {type(data)}")
+            print(f"[CLIENT] on_message RAW data keys: {list(data.keys()) if isinstance(data, dict) else 'N/A'}")
+            print(f"[CLIENT] on_message RAW data: {data}")
+            
             username = data.get("username", "Unknown")
             message = data.get("message", "")
             timestamp = data.get("timestamp", "")
             
-            # Debug: Log the raw file data
+            # Log file payload extraction
             raw_file = data.get("file")
-            print(f"[ChatClient] on_message raw_file type={type(raw_file)}, value={raw_file}")
+            print(f"[CLIENT] on_message raw_file type: {type(raw_file)}")
+            print(f"[CLIENT] on_message raw_file value: {raw_file}")
+            if isinstance(raw_file, dict):
+                print(f"[CLIENT] on_message raw_file keys: {list(raw_file.keys())}")
+                print(f"[CLIENT] on_message raw_file length: {len(raw_file)}")
             
-            file_payload = data.get("file") if isinstance(data.get("file"), dict) and len(data.get("file", {})) > 0 else None
-            print(f"[ChatClient] on_message file_payload after check: {file_payload}")
+            # Extract file payload - pass it through even if empty dict
+            file_payload = data.get("file")
+            if isinstance(file_payload, dict) and len(file_payload) == 0:
+                print(f"[CLIENT] on_message converting empty dict to None")
+                file_payload = None
+            
+            print(f"[CLIENT] on_message final file_payload: {file_payload}")
+            print(f"[CLIENT] on_message emitting: username={username}, msg_len={len(message)}, file={file_payload is not None}")
+            
+            # Convert dict to QML-compatible format via JSON serialization
+            file_payload = self._convert_dict_for_qml(file_payload)
             
             self.messageReceived.emit(username, message, file_payload)
             self.messageReceivedEx.emit(username, message, file_payload, timestamp)
         
         @sio.on("private_message_received")
         def on_private_message_received(data):
+            # Log raw data
+            print(f"[CLIENT] on_private_message_received RAW data: {data}")
+            print(f"[CLIENT] on_private_message_received RAW data keys: {list(data.keys())}")
+            
+            raw_file = data.get("file")
+            print(f"[CLIENT] on_private_message_received raw_file type: {type(raw_file)}")
+            print(f"[CLIENT] on_private_message_received raw_file value: {raw_file}")
+            if isinstance(raw_file, dict):
+                print(f"[CLIENT] on_private_message_received raw_file keys: {list(raw_file.keys())}")
+            
+            file_payload = data.get("file")
+            if isinstance(file_payload, dict) and len(file_payload) == 0:
+                print(f"[CLIENT] on_private_message_received converting empty dict to None")
+                file_payload = None
+            
+            print(f"[CLIENT] on_private_message_received final file_payload: {file_payload}")
+            
+            # Convert dict to QML-compatible format
+            if file_payload is not None and isinstance(file_payload, dict):
+                file_payload = dict(file_payload)
+                print(f"[CLIENT] on_private_message_received converted file_payload for QML: {file_payload}")
+            
             self._message_handler.privateMessageReceivedEx.emit(
                 data.get("sender", "Unknown"),
                 data.get("recipient", "Unknown"),
                 data.get("message", ""),
                 int(data.get("message_id", 0)),
                 data.get("status", ""),
-                data.get("file") if isinstance(data.get("file"), dict) and len(data.get("file", {})) > 0 else None,
+                file_payload,
                 data.get("timestamp", "")
             )
         
         @sio.on("private_message_sent")
         def on_private_message_sent(data):
+            # Log raw data
+            print(f"[CLIENT] on_private_message_sent RAW data: {data}")
+            print(f"[CLIENT] on_private_message_sent RAW data keys: {list(data.keys())}")
+            
+            raw_file = data.get("file")
+            print(f"[CLIENT] on_private_message_sent raw_file type: {type(raw_file)}")
+            print(f"[CLIENT] on_private_message_sent raw_file value: {raw_file}")
+            if isinstance(raw_file, dict):
+                print(f"[CLIENT] on_private_message_sent raw_file keys: {list(raw_file.keys())}")
+            
+            file_payload = data.get("file")
+            if isinstance(file_payload, dict) and len(file_payload) == 0:
+                print(f"[CLIENT] on_private_message_sent converting empty dict to None")
+                file_payload = None
+            
+            print(f"[CLIENT] on_private_message_sent final file_payload: {file_payload}")
+            
+            # Convert dict to QML-compatible format
+            if file_payload is not None and isinstance(file_payload, dict):
+                file_payload = dict(file_payload)
+                print(f"[CLIENT] on_private_message_sent converted file_payload for QML: {file_payload}")
+            
             self._message_handler.privateMessageSentEx.emit(
                 data.get("sender", "Unknown"),
                 data.get("recipient", "Unknown"),
                 data.get("message", ""),
                 int(data.get("message_id", 0)),
                 data.get("status", ""),
-                data.get("file") if isinstance(data.get("file"), dict) and len(data.get("file", {})) > 0 else None,
+                file_payload,
                 data.get("timestamp", "")
             )
         
@@ -586,8 +665,13 @@ class ChatClient(QObject):
     
     @Slot(str, str, str, result=str)
     def saveFileToDownloads(self, filename: str, data: str, mime: str) -> str:
-        """Save file to Downloads directory."""
+        """Save file to Downloads directory (for inline/base64 data)."""
         return self._file_handler.save_file_to_downloads(filename, data, mime)
+    
+    @Slot(str, str, result=str)
+    def downloadReceivedFile(self, transfer_id: str, filename: str) -> str:
+        """Download a received file (chunked transfer) to Downloads directory."""
+        return self._file_handler.download_received_file(transfer_id, filename)
     
     @Slot()
     def disconnect(self):
