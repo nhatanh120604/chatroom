@@ -140,39 +140,50 @@ The application delivers all essential capabilities for a secure, modern chatroo
 ```
 chat_app2/
 ├── client/
-│   ├── main.py                 # Client entry point
+│   ├── client.py               # Client entry point & main application logic
+│   ├── crypto_utils.py         # Encryption utilities (AES, RSA)
+│   ├── public_key.pem          # Server's RSA public key (for encryption)
 │   ├── qml/
-│   │   ├── Main.qml            # Orchestration file
-│   │   ├── Main_1.qml          # Main application window
-│   │   ├── components/         # Reusable UI components
-│   │   │   ├── MessageBubble.qml
-│   │   │   ├── Composer.qml
-│   │   │   ├── FileAttachment.qml
-│   │   │   ├── Header.qml
-│   │   │   ├── Avatar.qml
-│   │   │   ├── Toast.qml
-│   │   │   └── ...
-│   │   ├── pages/              # Full page views
-│   │   │   ├── PublicChatPage.qml
-│   │   │   └── PrivateChatPage.qml
-│   │   ├── styles/
-│   │   │   └── Theme.qml       # Global theme (singleton)
-│   │   └── assets/             # Images, sounds, fonts
-│   ├── handlers/
-│   │   └── file_handler.py     # File transfer logic
-│   └── requirements.txt
+│   │   └── Main.qml            # Complete Qt/QML application (consolidated)
+│   ├── assets/                 # UI assets
+│   │   ├── notification_message.wav
+│   │   ├── notification_private.wav
+│   │   └── ...
+│   ├── Dockerfile              # Docker configuration for client
+│   ├── requirements.txt         # Python dependencies
+│   ├── .env                     # Environment variables
+│   └── env.md                   # Environment setup documentation
 ├── server/
-│   ├── server.py               # Flask-SocketIO server
-│   ├── handlers/
-│   │   └── file_handler.py     # Server-side file handling
-│   ├── services/
-│   │   └── file_transfer_service.py
-│   ├── crypto_utils.py         # Encryption utilities
+│   ├── server.py               # Flask-SocketIO server & main logic
+│   ├── sqlite_logging.py       # Event logging to SQLite
 │   ├── private_key.pem         # Server's RSA private key
-│   └── public_key.pem          # Server's RSA public key
-├── requirements.txt
-├── README.md
-└── docker-compose.yml
+│   ├── public_key.pem          # Server's RSA public key
+│   ├── uploads/                # Directory for uploaded files
+│   ├── handlers/               # (Empty - handlers integrated into server.py)
+│   ├── services/               # (Empty - services integrated into server.py)
+│   ├── utils/                  # (Empty - utilities integrated into server.py)
+│   ├── Dockerfile              # Docker configuration for server
+│   ├── requirements.txt         # Python dependencies
+│   ├── render.yaml             # Render.com deployment config
+│   └── __init__.py
+├── test/
+│   ├── test_server.py          # Server unit tests
+│   ├── test_client.py          # Client unit tests
+│   └── __init__.py
+├── assets/                     # Project-level assets
+│   ├── file_icon.svg
+│   ├── emoji_icon.svg
+│   └── ...
+├── release/
+│   └── aurorachat_setup.iss    # Inno Setup installer script
+├── profile pics/               # Sample profile pictures
+├── requirements.txt            # Root dependencies
+├── rsa_generator.py            # RSA key generation utility
+├── docker-compose.yml          # Docker Compose configuration
+├── ChatClient.spec             # PyInstaller spec for executable
+├── README.md                   # This file
+├── change log.txt              # Version history
+└── venv/                       # Python virtual environment
 ```
 
 ### Component Architecture
